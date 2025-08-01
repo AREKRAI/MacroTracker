@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define DEFAULT_BUF_CAP (1 << 10)
+#include "Common.h"
 
 typedef struct {
   uint32_t cals, protein, fat, carbs;

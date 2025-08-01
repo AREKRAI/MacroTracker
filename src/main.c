@@ -4,7 +4,12 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <assert.h>
+
+#define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+#include <glad/gl.h>
+
+#include <log.h>
 
 #include "MacroDatabase.h"
 
@@ -141,25 +146,102 @@ void ConsoleApp_destroy(ConsoleApp_t *self) {
   free(self);
 }
 
-int main(void) {
-  // ConsoleApp_t *app = ConsoleApp_create();
-  // ConsoleApp_run(app);
-  // ConsoleApp_destroy(app);
-  if (glfwInit() != GLFW_TRUE)
-  {
-    printf("Failed to init GLFW\n");
-  }
+typedef struct _App_t {
+  GLFWwindow *_handle;
+  _Bool _running;
+  
+  double _lastTime;
+  double _deltaTime;
+} App_t;
+
+#define DEFAULT_WINDOW_WIDTH 1024
+#define DEFAULT_WINDOW_HEIGHT 512
+
+#include "Common.h"
+
+void _App_windowCloseCallback(GLFWwindow* window) {
+  App_t *app = glfwGetWindowUserPointer(window);
+
+  glfwSetWindowShouldClose(window, GLFW_TRUE);
+  app->_running = false;
+}
+
+Result_t App_create(App_t** p_app) {
+  *p_app = malloc(sizeof(App_t));
 
   glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-  GLFWwindow *window = glfwCreateWindow(1024, 512, "MacroApp", NULL, NULL);
-
-  while (!glfwWindowShouldClose(window))
-  {
-    glfwSwapBuffers(window);
-    glfwPollEvents();
+  GLFWwindow *window;
+  if (!(window = glfwCreateWindow(1024, 512, "MacroApp", NULL, NULL))) {
+    return RESULT_FAIL;
   }
 
-  glfwDestroyWindow(window);
+  **p_app = (App_t) {
+    ._handle = window,
+    ._running = true
+  };
+
+  glfwSetWindowUserPointer(window, *p_app);
+  glfwSetWindowCloseCallback(window, _App_windowCloseCallback);
+
+  glfwMakeContextCurrent(window);
+  int glVersion = 0;
+  if (glVersion = gladLoadGL(glfwGetProcAddress)) {
+    log_info("Loaded OpenGL %d.%d", GLAD_VERSION_MAJOR(glVersion), GLAD_VERSION_MINOR(glVersion));
+  } else {
+    log_error("Failed to initialize OpenGL context");
+    return RESULT_FAIL;
+  }
+
+  return RESULT_SUCCESS;
+}
+
+void _App_render(App_t *app) {
+  glfwMakeContextCurrent(app->_handle);
+  glClear(GL_COLOR_BUFFER_BIT);
+  glfwSwapBuffers(app->_handle);
+}
+
+void _App_update(App_t *app)
+{
+  glfwPollEvents();
+}
+
+void App_destroy(App_t *app) {
+  glfwDestroyWindow(app->_handle);
+  free(app);
+}
+
+void App_run(App_t *app) {
+  app->_lastTime = glfwGetTime();
+
+  while (app->_running) {
+    double oldTime = app->_lastTime;
+
+    app->_lastTime = glfwGetTime();
+    app->_deltaTime = app->_lastTime - oldTime;
+
+    log_info("Delta: %lfs", app->_deltaTime);
+    _App_update(app);
+    _App_render(app);
+  }
+}
+
+int main(void) {
+  if (glfwInit() != GLFW_TRUE) {
+    log_error("Failed to init GLFW");
+  }
+
+  App_t *app = NULL;
+  if (App_create(&app) != RESULT_SUCCESS) {
+    log_error("Failed to create window");
+
+    glfwTerminate();
+    return -1;
+  }
+
+  App_run(app);
+  App_destroy(app);
+
   glfwTerminate();
   return 0;
 }

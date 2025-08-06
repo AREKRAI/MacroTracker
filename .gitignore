@@ -1051,3 +1051,4 @@ dkms.conf
 /lib
 /macro.dir
 /.vscode
+macro_runtime_log.txt

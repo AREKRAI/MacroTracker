@@ -20,11 +20,14 @@ set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 add_subdirectory(deps/glfw)
 
+list(APPEND CMAKE_PREFIX_PATH "${CMAKE_SOURCE_DIR}/deps")
+
 add_executable(macro ${SRCS} ${DEP_SRCS})
 
 target_include_directories(macro PRIVATE
   ${CMAKE_SOURCE_DIR}/include
   ${CMAKE_SOURCE_DIR}/deps/glad/include
+  ${CMAKE_SOURCE_DIR}/deps/cglm/include
   
   ${CMAKE_SOURCE_DIR}/deps/log.c/src
 )

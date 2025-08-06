@@ -1,0 +1,12 @@
+2025-08-06 11:26:11 INFO  C:\Users\drlil\Downloads\MacroTracker\src\main.c:658: Loaded OpenGL 4.6
+
+2025-08-06 11:26:11 INFO  C:\Users\drlil\Downloads\MacroTracker\src\main.c:471: Opened vertex shader file: vert.glsl
+
+2025-08-06 11:26:11 INFO  C:\Users\drlil\Downloads\MacroTracker\src\main.c:486: Opened fragment shader file: frag.glsl
+
+2025-08-06 11:26:11 INFO  C:\Users\drlil\Downloads\MacroTracker\src\main.c:533: Successfuly loaded vertex shader (1 : vert.glsl)
+
+2025-08-06 11:26:11 INFO  C:\Users\drlil\Downloads\MacroTracker\src\main.c:564: Successfuly loaded fragment shader (2 : frag.glsl)
+
+2025-08-06 11:26:11 INFO  C:\Users\drlil\Downloads\MacroTracker\src\main.c:606: Successfuly linked shader program (3 - vert.glsl : frag.glsl)
+

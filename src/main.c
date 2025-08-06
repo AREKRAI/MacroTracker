@@ -527,7 +527,7 @@ Result_t _App_setupGl(App_t *app) {
     );
     return RESULT_FAIL;
   } else {
-    log_info("Successfuly loaded vertex shader (%u : %s)" ENDL,
+    log_info("Successfully loaded vertex shader (%u : %s)" ENDL,
       vertexShader,
       VERT_FILE_NAME
     );
@@ -559,7 +559,7 @@ Result_t _App_setupGl(App_t *app) {
     );
     return RESULT_FAIL;
   } else {
-    log_info("Successfuly loaded fragment shader (%u : %s)" ENDL,
+    log_info("Successfully loaded fragment shader (%u : %s)" ENDL,
       fragmentShader, FRAG_FILE_NAME
     );
   }
@@ -599,7 +599,7 @@ Result_t _App_setupGl(App_t *app) {
       charBuff
     );
   } else {
-    log_info("Successfuly linked shader program (%u - %s : %s)" ENDL,
+    log_info("Successfully linked shader program (%u - %s : %s)" ENDL,
       app->_shader,
       VERT_FILE_NAME,
       FRAG_FILE_NAME
@@ -823,6 +823,7 @@ int main(void) {
 
   glfwTerminate();
 
+  log_info("Program ended successfully" ENDL);
   fclose(logFile);
   return 0;
 }

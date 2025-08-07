@@ -170,6 +170,8 @@ typedef struct _App_t {
   GLuint _shader;
   GLuint _quadVAO, _quadVBO, _quadEBO;
 
+  mat4 _projection;
+
   vec2 camera;
   vec2 _cameraTarget;
 
@@ -184,7 +186,6 @@ typedef struct _App_t {
 
 #include "Common.h"
 
-#define VISIBLE_HEIGHT_SIZE 4.f
 #define BASE_SPEED 10.f
 
 void _App_windowCloseCallback(GLFWwindow* window) {
@@ -194,31 +195,27 @@ void _App_windowCloseCallback(GLFWwindow* window) {
   app->_running = false;
 }
 
-void  _App_calculateMouseTransform(App_t *app) {
-  double mx, my;
-  glfwGetCursorPos(app->_wnd, &mx, &my);
+void _App_framebufferResizeCallback(GLFWwindow *window, int width, int height) {
+  App_t *app = glfwGetWindowUserPointer(window);
 
-  int fbfW = 0, fbfH = 0;
-  glfwGetFramebufferSize(app->_wnd, &fbfW, &fbfH);
+  float aspect = width / (float)height;
 
-  float aspect = fbfW / (float)fbfH;
-
-  mat4 projection = GLM_MAT4_IDENTITY_INIT;
-
-  float frameWidth = VISIBLE_HEIGHT_SIZE;
-  float frameHeight = frameWidth / aspect;
-
-  float left = -frameWidth / 2.0f;  // e.g., -5.0
-  float right = frameWidth / 2.0f;  // e.g., 5.0
-  float bottom = -frameHeight / 2.0f; // e.g., -3.75 (for aspect = 4/3)
-  float top = frameHeight / 2.0f;    // e.g., 3.75
+  float left = -0.5f;
+  float right = 0.5f;
+  float bottom = -0.5f / aspect;
+  float top = 0.5f / aspect;
 
   glm_ortho(
     left, right,
     bottom, top, 
     -1.f, 1.f, 
-  projection
+    app->_projection
   );
+}
+
+void  _App_calculateMouseTransform(App_t *app) {
+  double mx, my;
+  glfwGetCursorPos(app->_wnd, &mx, &my);
 
   vec3 start = {app->_mouseStart[0], app->_mouseStart[1], 0};
   vec3 end = {(float)mx, (float)my, 0};
@@ -227,8 +224,8 @@ void  _App_calculateMouseTransform(App_t *app) {
   vec3 endProd;
 
 
-  glm_mat4_mulv3(projection, start, 1.0, startProd);
-  glm_mat4_mulv3(projection, end, 1.0, endProd);
+  glm_mat4_mulv3(app->_projection, start, 1.0, startProd);
+  glm_mat4_mulv3(app->_projection, end, 1.0, endProd);
 
   vec3 delta;
   glm_vec3_sub(start, end, delta);
@@ -457,7 +454,7 @@ Result_t _App_setupGl(App_t *app) {
   GLint vertFileSize = 0, fragFileSize = 0;
 
   errno_t err = 0;
-  if ((err = fopen_s(&vertFile, VERT_FILE_NAME, "r")) != 0 ||
+  if ((err = fopen_s(&vertFile, VERT_FILE_NAME, "rb")) != 0 ||
     vertFile == NULL) {
     log_error(
       "Couldn't create/open the vertex shader file %s, error code: %i" ENDL,
@@ -471,7 +468,7 @@ Result_t _App_setupGl(App_t *app) {
     log_info("Opened vertex shader file: %s" ENDL, VERT_FILE_NAME);
   }
   
-  if ((err = fopen_s(&fragFile, FRAG_FILE_NAME, "r")) != 0 || 
+  if ((err = fopen_s(&fragFile, FRAG_FILE_NAME, "rb")) != 0 || 
     fragFile == NULL) {
     log_error(
       "Couldn't create/open the fragment shader file %s, error code: %i" ENDL,
@@ -535,7 +532,7 @@ Result_t _App_setupGl(App_t *app) {
 #endif
 
   rewind(fragFile);
-  memset(charBuff, 0, charCount);
+  // memset(charBuff, 0, charCount);
   readFileSize = (GLint)fread(charBuff,
     sizeof(char),
     fragFileSize - 1, 
@@ -618,14 +615,15 @@ Result_t _App_setupGl(App_t *app) {
 Result_t App_create(App_t** p_app) {
   *p_app = malloc(sizeof(App_t));
 
-  glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+  glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+  // glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
 
 #ifdef APP_DEBUG
   glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 #endif
 
   GLFWwindow *window;
-  if (!(window = glfwCreateWindow(1024, 512, "MacroApp", NULL, NULL))) {
+  if (!(window = glfwCreateWindow(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT, "MacroApp", NULL, NULL))) {
     return RESULT_FAIL;
   }
 
@@ -643,12 +641,31 @@ Result_t App_create(App_t** p_app) {
     ._quadVBO = 0
   };
 
+  int fbfW = 0, fbfH = 0;
+  glfwGetFramebufferSize((*p_app)->_wnd, &fbfW, &fbfH);
+
+  float aspect = fbfW / (float)fbfH;
+
+  mat4 projection = GLM_MAT4_IDENTITY_INIT;
+
+  float left = -0.5f;
+  float right = 0.5f;
+  float bottom = -0.5f / aspect;
+  float top = 0.5f / aspect;
+
+  glm_ortho(
+    left, right,
+    bottom, top, 
+    -1.f, 1.f,
+    (*p_app)->_projection
+  );
   glm_mat4_identity((*p_app)->_globalUBData.projectionView);
 
   glfwSetWindowUserPointer(window, *p_app);
   glfwSetWindowCloseCallback(window, _App_windowCloseCallback);
   glfwSetKeyCallback(window, _App_keyInputCallback);
   glfwSetMouseButtonCallback(window, _App_mouseButtonCallback);
+  glfwSetFramebufferSizeCallback(window, _App_framebufferResizeCallback);
 
   glfwMakeContextCurrent(window);
   int glVersion = 0;
@@ -721,35 +738,12 @@ void _App_update(App_t *app)
     glm_vec2_add(app->camera, offset, app->_cameraTarget);
   }
 
-  
-  int fbfW = 0, fbfH = 0;
-  glfwGetFramebufferSize(app->_wnd, &fbfW, &fbfH);
+  glm_vec2_lerp(app->camera, app->_cameraTarget, (float)app->_deltaTime, app->camera);
 
-  float aspect = fbfW / (float)fbfH;
-
-  mat4 projection = GLM_MAT4_IDENTITY_INIT;
   mat4 view = GLM_MAT4_IDENTITY_INIT;
-
-  float frameWidth = VISIBLE_HEIGHT_SIZE;
-  float frameHeight = frameWidth / aspect;
-
-  float left = -frameWidth / 2.0f;  // e.g., -5.0
-  float right = frameWidth / 2.0f;  // e.g., 5.0
-  float bottom = -frameHeight / 2.0f; // e.g., -3.75 (for aspect = 4/3)
-  float top = frameHeight / 2.0f;    // e.g., 3.75
-
-  glm_ortho(
-    left, right,
-    bottom, top, 
-    -1.f, 1.f, 
-  projection
-  );
-
-  glm_vec2_lerp(app->camera, app->_cameraTarget, app->_deltaTime, app->camera);
-  
   glm_translate(view, (vec3) { app->camera[0], app->camera[1], 0.0 });
 
-  glm_mat4_mul(projection, view, app->_globalUBData.projectionView);
+  glm_mat4_mul(app->_projection, view, app->_globalUBData.projectionView);
 
   // GL CODE -> marked to find if this gets moved into its own function
   // as the number of buffers that are written to grows
@@ -773,13 +767,13 @@ void App_run(App_t *app) {
   app->_lastTime = glfwGetTime();
 
   while (app->_running) {
-    glfwPollEvents();
     double newTime = glfwGetTime();
 
     app->_deltaTime = newTime - app->_lastTime;
     if (app->_deltaTime < FRAME_TIME) {
       continue;
     }
+    glfwPollEvents();
 
     _App_update(app);
     _App_render(app);

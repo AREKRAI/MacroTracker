@@ -12,6 +12,12 @@
 #include <cglm/cglm.h>
 #include <cglm/struct.h>
 
+#include <ft2build.h>
+#include FT_FREETYPE_H
+
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
 #include <log.h>
 
 #include "MacroDatabase.h"
@@ -160,6 +166,41 @@ typedef struct __GlobalUBData_t {
   mat4 projectionView;
 } _GlobalUBData_t;
 
+typedef struct __Transform2D_t {
+  vec2 position;
+  float scale;
+  float rotation;
+} Transform2D_t;
+
+typedef struct __LocalUBData2D_t {
+  mat4 model;
+} _LocalUBData2D_t;
+
+typedef uint32_t u32vec2[2];
+
+typedef struct __Glyph_t {
+  unsigned char character;
+  vec2 size;
+  vec2 bearing;
+
+  _Bool isWhitespace;
+
+  GLuint glTextureHandle;
+  u32vec2 advance;
+} _Glyph_t;
+
+typedef union _SizeVec2_t {
+  struct {
+    size_t x, y;
+  };
+
+  struct {
+    size_t width, height;
+  };
+
+  size_t ptr[2];
+} SizeVec2_t;
+
 typedef struct _App_t {
   GLFWwindow *_wnd;
   _Bool _running;
@@ -175,10 +216,21 @@ typedef struct _App_t {
   vec2 camera;
   vec2 _cameraTarget;
 
-  GLuint _globalUB;
+  GLuint _globalUB, _localUB;
   _GlobalUBData_t _globalUBData;
 
   vec2 _mouseStart;
+  vec2 _spritePosition;
+
+  FT_Library _ft;
+  FT_Face _ftFace;
+
+  _Glyph_t *_glyphs;
+  size_t _glyphCount;
+
+  SizeVec2_t _atlasSize;
+  GLuint _atlasTex;
+  GLuint _altasFb;
 } App_t;
 
 #define DEFAULT_WINDOW_WIDTH 1024
@@ -186,7 +238,7 @@ typedef struct _App_t {
 
 #include "Common.h"
 
-#define BASE_SPEED 10.f
+#define BASE_SPEED 2.f
 
 void _App_windowCloseCallback(GLFWwindow* window) {
   App_t *app = glfwGetWindowUserPointer(window);
@@ -200,10 +252,10 @@ void _App_framebufferResizeCallback(GLFWwindow *window, int width, int height) {
 
   float aspect = width / (float)height;
 
-  float left = -0.5f;
-  float right = 0.5f;
-  float bottom = -0.5f / aspect;
-  float top = 0.5f / aspect;
+  float left = -1.f;
+  float right = 1.f;
+  float bottom = -1.f / aspect;
+  float top = 1.f / aspect;
 
   glm_ortho(
     left, right,
@@ -211,6 +263,8 @@ void _App_framebufferResizeCallback(GLFWwindow *window, int width, int height) {
     -1.f, 1.f, 
     app->_projection
   );
+
+  glViewport(0, 0, width, height);
 }
 
 void  _App_calculateMouseTransform(App_t *app) {
@@ -245,9 +299,9 @@ void _App_mouseButtonCallback(GLFWwindow* window, int button, int action, int mo
     glfwGetCursorPos(window, &mx, &my);
     app->_mouseStart[0] = (float)mx;
     app->_mouseStart[1] = (float)my;
-  } else if (action == GLFW_RELEASE) {
-    _App_calculateMouseTransform(app);
   }
+
+  _App_calculateMouseTransform(app);
 }
 
 void _App_keyInputCallback(GLFWwindow* window,
@@ -264,8 +318,8 @@ void _App_keyInputCallback(GLFWwindow* window,
   app->_running = false;
 }
 
-#define VERT_FILE_NAME "vert.glsl"
-#define FRAG_FILE_NAME "frag.glsl"
+#define VERT_FILE_NAME "vert_default_2d.glsl"
+#define FRAG_FILE_NAME "frag_default_2d.glsl"
 
 #ifdef APP_DEBUG
 void APIENTRY _App_OpenGL_debugMsgCallback(GLenum source, GLenum type, GLuint id,
@@ -415,18 +469,26 @@ void _App_OpenGlCleanup(App_t *app) {
   glDeleteBuffers(1, &app->_globalUB);
 }
 
-Result_t _App_setupGl(App_t *app) {
+typedef struct _Vertex2D_t {
+  vec2 position;
+  vec2 tex;
+} Vertex2D_t;
+
+Result_t _App_setupOpenGl(App_t *app) {
 #ifdef APP_DEBUG
   glEnable(GL_DEBUG_OUTPUT);
   glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
   glDebugMessageCallback(_App_OpenGL_debugMsgCallback, NULL);
 #endif
 
-  float vertices[] = {
-      -0.5f, -0.5f, 0.0f,  // bottom left
-        0.5f, -0.5f, 0.0f,  // bottom right
-        0.5f,  0.5f, 0.0f,  // top right
-      -0.5f,  0.5f, 0.0f   // top left
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+  Vertex2D_t vertices[] = {
+    { .position = {-0.5f, -0.5f}, .tex = {0, 1} },  // bottom left
+    { .position = { 0.5f, -0.5f}, .tex = {1, 1} },  // bottom right
+    { .position = { 0.5f,  0.5f}, .tex = {1, 0} },  // top right
+    { .position = {-0.5f,  0.5f}, .tex = {0, 0} }   // top left
   };
   
   unsigned int indices[] = {
@@ -434,21 +496,34 @@ Result_t _App_setupGl(App_t *app) {
       2, 3, 0    // second triangle
   };
 
-  glGenVertexArrays(1, &app->_quadVAO);
-  glGenBuffers(1, &app->_quadVBO);
-  glGenBuffers(1, &app->_quadEBO);
-  glBindVertexArray(app->_quadVAO);
-
-  glBindBuffer(GL_ARRAY_BUFFER, app->_quadVBO);
-  glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+  glCreateVertexArrays(1, &app->_quadVAO);
   
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, app->_quadEBO);
-  glNamedBufferData(app->_quadEBO, sizeof(indices), indices, GL_STATIC_DRAW);
-
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float),
-    (void*)0
+  glCreateBuffers(1, &app->_quadVBO);
+  glNamedBufferData(app->_quadVBO, sizeof(vertices),
+    vertices, GL_STATIC_DRAW
   );
-  glEnableVertexAttribArray(0);
+  glVertexArrayVertexBuffer(app->_quadVAO, 0, app->_quadVBO,
+    0, sizeof(Vertex2D_t)
+  );
+
+  glCreateBuffers(1, &app->_quadEBO);
+  glNamedBufferData(app->_quadEBO, sizeof(indices),
+    indices, GL_STATIC_DRAW
+  );
+  glVertexArrayElementBuffer(app->_quadVAO, app->_quadEBO);
+
+  glVertexArrayAttribFormat(app->_quadVAO, 0, 3, GL_FLOAT,
+    GL_FALSE, offsetof(Vertex2D_t, position)
+  );
+  glVertexArrayAttribBinding(app->_quadVAO, 0, 0);
+  glEnableVertexArrayAttrib(app->_quadVAO, 0);
+
+  glVertexArrayAttribFormat(app->_quadVAO, 1, 2, GL_FLOAT,
+    GL_FALSE, offsetof(Vertex2D_t, tex)
+  );
+  glVertexArrayAttribBinding(app->_quadVAO, 1, 0);
+  glEnableVertexArrayAttrib(app->_quadVAO, 1);
+
 
   FILE *vertFile, *fragFile;
   GLint vertFileSize = 0, fragFileSize = 0;
@@ -609,7 +684,106 @@ Result_t _App_setupGl(App_t *app) {
     &app->_globalUBData, GL_STATIC_DRAW
   );
 
+  glCreateBuffers(1, &app->_localUB);
+  glNamedBufferData(app->_localUB,
+    sizeof(_LocalUBData2D_t), NULL, GL_STATIC_DRAW
+  );
+
   return RESULT_SUCCESS;
+}
+
+#define FONT_PATH "fonts/Ldfcomicsansbold-zgma.ttf"
+#define FONT_SIZE (1 << 7)
+#define ATLAS_START_SIZE (SizeVec2_t) { 1 << 12, 1 << 12 }
+
+Result_t _App_loadGlyphs(App_t *app) {
+  if (FT_Init_FreeType(&app->_ft) != 0) {
+    log_error("Failed to init/load freetype library" ENDL);
+    return RESULT_FAIL;
+  }
+
+  if (FT_New_Face(app->_ft, FONT_PATH, 0, &app->_ftFace)) {
+    log_error("Failed to load font at: " FONT_PATH ENDL);
+    return RESULT_FAIL;
+  }
+
+  FT_Set_Pixel_Sizes(app->_ftFace, 0, FONT_SIZE);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+  // TODO:
+  // glCreateFramebuffers(1, &app->_altasFb);
+  // glCreateTextures(GL_TEXTURE_2D, 1, &app->_atlasTex);
+  // glTextureStorage2D(app->_atlasTex, 1, GL_R8, 
+  //   ATLAS_START_SIZE.width, ATLAS_START_SIZE.height
+  // );
+  // glNamedFramebufferTexture(app->_altasFb, 
+  //   GL_COLOR_ATTACHMENT0, app->_atlasTex, 0);
+
+  app->_glyphCount = 128;
+  app->_glyphs = malloc(sizeof(_Glyph_t) * app->_glyphCount);
+
+  for (unsigned char c = 0; c < app->_glyphCount; c++)
+  {
+    if (FT_Load_Char(app->_ftFace, c, FT_LOAD_RENDER)) {
+      log_warn("Failed to load char %c of font " FONT_PATH ENDL);
+      continue;
+    }
+
+    // generate texture
+    GLuint texture = 0;
+    if (app->_ftFace->glyph->bitmap.buffer == NULL)
+      goto skip_glyph_texture_creation;
+    glCreateTextures(GL_TEXTURE_2D, 1, &texture);
+    glTextureStorage2D(texture, 1, GL_R8,
+      app->_ftFace->glyph->bitmap.width, app->_ftFace->glyph->bitmap.rows
+    );
+
+    // set texture options
+    glTextureParameteri(texture, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTextureParameteri(texture, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTextureParameteri(texture, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTextureParameteri(texture, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    glTextureSubImage2D(texture, 0, 
+      0, 0,
+      app->_ftFace->glyph->bitmap.width, app->_ftFace->glyph->bitmap.rows,
+      GL_RED, GL_UNSIGNED_BYTE, app->_ftFace->glyph->bitmap.buffer
+    );
+
+skip_glyph_texture_creation:
+    _Glyph_t glyph = {
+      .character = c,
+      .glTextureHandle = texture,
+      .isWhitespace = app->_ftFace->glyph->bitmap.buffer == NULL,
+      .size = { 
+        app->_ftFace->glyph->bitmap.width, 
+        app->_ftFace->glyph->bitmap.rows 
+      },
+      .bearing = { 
+        app->_ftFace->glyph->bitmap_left, 
+        app->_ftFace->glyph->bitmap_top 
+      },
+      .advance = { 
+        (uint32_t)app->_ftFace->glyph->advance.x,
+        (uint32_t)app->_ftFace->glyph->advance.y 
+      }
+    };
+
+    app->_glyphs[c] = glyph;
+  }
+
+  return RESULT_SUCCESS;
+}
+
+void _App_cleanupTextRenderer(App_t *app) {
+  FT_Done_Face(app->_ftFace);
+  FT_Done_FreeType(app->_ft);
+
+  for (size_t glyphIndex = 0; glyphIndex < app->_glyphCount; glyphIndex++) {
+    _Glyph_t *glyph = &app->_glyphs[glyphIndex];
+    glDeleteTextures(1, &glyph->glTextureHandle);
+  }
+  free(app->_glyphs);
 }
 
 Result_t App_create(App_t** p_app) {
@@ -638,7 +812,16 @@ Result_t App_create(App_t** p_app) {
 
     ._quadEBO = 0,
     ._quadVAO = 0,
-    ._quadVBO = 0
+    ._quadVBO = 0,
+
+    ._glyphs = NULL,
+    ._glyphCount = 0,
+
+    ._globalUB = 0, ._localUB = 0,
+    ._globalUBData = {0},
+
+    ._spritePosition = {0, 0},
+    ._mouseStart = {0, 0},
   };
 
   int fbfW = 0, fbfH = 0;
@@ -648,10 +831,10 @@ Result_t App_create(App_t** p_app) {
 
   mat4 projection = GLM_MAT4_IDENTITY_INIT;
 
-  float left = -0.5f;
-  float right = 0.5f;
-  float bottom = -0.5f / aspect;
-  float top = 0.5f / aspect;
+  float left = -1.f;
+  float right = 1.f;
+  float bottom = -1.f / aspect;
+  float top = 1.f / aspect;
 
   glm_ortho(
     left, right,
@@ -678,12 +861,103 @@ Result_t App_create(App_t** p_app) {
     return RESULT_FAIL;
   }
 
-  if (_App_setupGl(*p_app) != RESULT_SUCCESS) {
+  if (_App_setupOpenGl(*p_app) != RESULT_SUCCESS) {
     log_error("Failed to setup OpenGL resources" ENDL);
     return RESULT_FAIL;
   }
 
+  if (_App_loadGlyphs(*p_app) != RESULT_SUCCESS) {
+    log_error("Failed to load glyphs" ENDL);
+    return RESULT_FAIL;
+  }
+
   return RESULT_SUCCESS;
+}
+
+typedef struct __TextInfo_t {
+  uint32_t fontSize;
+  float horSpacing;
+  float vertSpacing;
+} TextInfo_t;
+
+#define TEXT_INFO_INIT (TextInfo_t) { \
+  .fontSize = 28,                     \
+  .horSpacing = 0.2f,                 \
+  .vertSpacing = 0.5f,                \
+  }
+
+void _App_drawText(App_t *app, const char *text,
+  const Transform2D_t transform, const TextInfo_t info) {
+  glUseProgram(app->_shader);
+  glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->_globalUB);
+  glBindVertexArray(app->_quadVAO);
+
+  _LocalUBData2D_t ubData = {0};
+  vec2 lPos = { transform.position[0], transform.position[1] };
+
+  int wwidth = 0, wheight = 0;
+  glfwGetFramebufferSize(app->_wnd, &wwidth, &wheight);
+  const float normalizationFactor = info.fontSize / 
+    ((float)FONT_SIZE * wheight);
+  const float scale = transform.scale * normalizationFactor;
+
+  uint32_t peakYAdvance = 0;
+  float peakYBearing = 0;
+
+  while (*text != '\0') {
+    _Glyph_t *glyph = &app->_glyphs[*text];
+    lPos[0] += ((glyph->advance[0] >> 6) / 2.f + info.horSpacing) * scale;
+
+    if (glyph->isWhitespace || *text == '\n')
+      goto skip_glyph_rendering;
+
+    vec3 glyphPosition = {
+      lPos[0] + glyph->bearing[0] * scale,
+      lPos[1] - (glyph->size[1] / 2.f - glyph->bearing[1]) * scale,
+      0.f
+    };
+
+    mat4 scaleMatrix = GLM_MAT4_IDENTITY_INIT;
+    mat4 transformMatrix = GLM_MAT4_IDENTITY_INIT;
+    glm_scale(scaleMatrix, 
+      (vec3) { 
+        glyph->size[0] * scale,
+        glyph->size[1] * scale,
+        1.f
+      }
+    );
+
+    glm_translate(transformMatrix, glyphPosition);
+    mat4 rotationMatrix = GLM_MAT4_IDENTITY_INIT;
+    glm_rotate(rotationMatrix, 
+      transform.rotation * GLM_PI / 180.0, 
+      (vec3){0, 0, 1}
+    );
+    glm_mul(rotationMatrix, transformMatrix, ubData.model);
+    glm_mat4_mul(ubData.model, scaleMatrix, ubData.model);
+
+    glNamedBufferSubData(app->_localUB, 0,
+      sizeof(_LocalUBData2D_t), &ubData
+    );
+    glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->_localUB);
+    glBindTextureUnit(0, glyph->glTextureHandle);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    
+skip_glyph_rendering:
+    lPos[0] += ((glyph->advance[0] >> 6) / 2.f) * scale;
+    
+    peakYAdvance = glyph->advance[1] > peakYAdvance ?
+      glyph->advance[1] : peakYAdvance;
+
+    peakYBearing = glyph->bearing[1] > peakYBearing ?
+      glyph->bearing[1] : peakYBearing;
+    if (*text == '\n') {
+      lPos[1] -= ((peakYAdvance >> 6) + peakYBearing + info.vertSpacing) * scale;
+      lPos[0] = transform.position[0];
+    }
+    
+    text++;
+  }
 }
 
 void _App_render(App_t *app) {
@@ -692,51 +966,71 @@ void _App_render(App_t *app) {
 
   glUseProgram(app->_shader);
   glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->_globalUB); 
+  glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->_localUB);
+  glBindTextureUnit(0, app->_glyphs['A'].glTextureHandle);
   glBindVertexArray(app->_quadVAO);
   glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-
+  _App_drawText(app, "This shit is Epic\n we goon to femboys twin", 
+    (Transform2D_t) {
+      .position = {0.5, 0.5},
+      .rotation = -15.f,
+      .scale = 10.f
+    },
+    TEXT_INFO_INIT
+  );
+  char fpsBuffer[36];
+  sprintf_s(fpsBuffer, sizeof(fpsBuffer) / sizeof(char), 
+    "FPS: %.2f", (1.0 / app->_deltaTime));
+  _App_drawText(app, fpsBuffer, (Transform2D_t) {
+      .position = {0.5, 0.5},
+      .rotation = 0.f,
+      .scale = 1.f
+    },
+    (TextInfo_t) {
+      .fontSize = 100,
+      .horSpacing = 10.f,
+      .vertSpacing = 1.f
+    }
+  );
   glfwSwapBuffers(app->_wnd);
 }
 
 void _App_update(App_t *app)
 {
-  // MOVE CAMERA AND COMPONENTS
-
   vec2 offset = {0, 0};
   _Bool hasMoved = false;
 
   if (glfwGetKey(app->_wnd, GLFW_KEY_W) == GLFW_PRESS) {
     hasMoved = true;
-    offset[1] -= 1;
+    offset[1] += 1;
   }
 
   if (glfwGetKey(app->_wnd, GLFW_KEY_S) == GLFW_PRESS) {
     hasMoved = true;
-    offset[1] += 1;
+    offset[1] -= 1;
   }
 
   if (glfwGetKey(app->_wnd, GLFW_KEY_A) == GLFW_PRESS) {
     hasMoved = true;
-    offset[0] += 1;
+    offset[0] -= 1;
   }
   
   if (glfwGetKey(app->_wnd, GLFW_KEY_D) == GLFW_PRESS) {
     hasMoved = true;
-    offset[0] -= 1;
+    offset[0] += 1;
   }
 
   if (hasMoved) {
     float offsetMag = sqrtf(offset[0] * offset[0] + offset[1] * offset[1]);
     float offsetMagNorm = 1.f / offsetMag;
     float transformMultiplier = 
-      (float)app->_deltaTime * BASE_SPEED * offsetMagNorm;
+      (float)app->_deltaTime * offsetMagNorm;
 
-    offset[0] *= transformMultiplier;
-    offset[1] *= transformMultiplier;
-
-
-    glm_vec2_add(app->camera, offset, app->_cameraTarget);
+    glm_vec2_scale(offset, transformMultiplier * BASE_SPEED, offset);
+    
+    glm_vec2_add(app->_spritePosition, offset, app->_spritePosition);
   }
+
 
   glm_vec2_lerp(app->camera, app->_cameraTarget, (float)app->_deltaTime, app->camera);
 
@@ -752,11 +1046,30 @@ void _App_update(App_t *app)
     sizeof(_GlobalUBData_t), &app->_globalUBData
   );
 
+  _LocalUBData2D_t spriteUB = {0};
+  glm_mat4_identity(spriteUB.model);
+  glm_translate(spriteUB.model, 
+    (vec3) { app->_spritePosition[0], app->_spritePosition[1], 0 }
+  );
+
+  glNamedBufferSubData(app->_localUB, 0, 
+    sizeof(_LocalUBData2D_t), &spriteUB
+  );
 }
 
 void App_destroy(App_t *app) {
+  if (app == NULL) {
+    log_warn("App is set to NULL");
+    return;
+  }
+
+  _App_cleanupTextRenderer(app);
+
   _App_OpenGlCleanup(app);
-  glfwDestroyWindow(app->_wnd);
+  
+  if (app->_wnd != NULL)
+    glfwDestroyWindow(app->_wnd);
+  
   free(app);
 }
 
@@ -795,20 +1108,26 @@ int main(void) {
       err
     );
   } else {
+    log_add_fp(logFile, 0);
     log_info("Opened log file: %s" ENDL, LOG_FILE_NAME);
   }
-  
-  log_add_fp(logFile, 0);
 
   if (glfwInit() != GLFW_TRUE) {
     log_error("Failed to init GLFW");
+    glfwTerminate();
+
+    fclose(logFile);
+    return -1;
   }
 
   App_t *app = NULL;
   if (App_create(&app) != RESULT_SUCCESS) {
-    log_error("Failed to create window");
+    log_info("Program failed at app creation" ENDL);
 
+    App_destroy(app);
     glfwTerminate();
+
+    fclose(logFile);
     return -1;
   }
 

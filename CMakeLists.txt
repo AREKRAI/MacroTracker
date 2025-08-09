@@ -7,6 +7,7 @@ set(SRCS
   ${SRC_DIR}/MacroDatabase.c
 )
 
+set(FREETYPE "${CMAKE_SOURCE_DIR}/deps/freetype-2.13.3")
 set(GLAD_SRC_DIR ${CMAKE_SOURCE_DIR}/deps/glad/src)
 set (DEP_SRCS
   ${GLAD_SRC_DIR}/gl.c
@@ -19,8 +20,6 @@ set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 add_subdirectory(deps/glfw)
-add_subdirectory(deps/freetype)
-
 
 list(APPEND CMAKE_PREFIX_PATH "${CMAKE_SOURCE_DIR}/deps")
 
@@ -31,11 +30,12 @@ target_include_directories(macro PRIVATE
 
   ${CMAKE_SOURCE_DIR}/deps/glad/include
   ${CMAKE_SOURCE_DIR}/deps/cglm/include
-  ${CMAKE_SOURCE_DIR}/deps/freetype/include
+  ${FREETYPE}/include
   ${CMAKE_SOURCE_DIR}/deps/log.c/src
+  ${CMAKE_SOURCE_DIR}/deps/stb
 )
 
-target_link_libraries(macro PRIVATE glfw freetype)
+target_link_libraries(macro PRIVATE glfw "${FREETYPE}/objs/x64/Debug Static/freetype.lib")
 
 set_target_properties(macro
   PROPERTIES

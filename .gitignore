@@ -1052,3 +1052,6 @@ dkms.conf
 /macro.dir
 /.vscode
 macro_runtime_log.txt
+
+CPackSourceConfig.cmake
+CPackConfig.cmake

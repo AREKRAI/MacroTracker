@@ -25,6 +25,8 @@ list(APPEND CMAKE_PREFIX_PATH "${CMAKE_SOURCE_DIR}/deps")
 
 add_executable(macro ${SRCS} ${DEP_SRCS})
 
+add_compile_options("$<$<C_COMPILER_ID:MSVC>:/utf-8>")
+
 target_include_directories(macro PRIVATE
   ${CMAKE_SOURCE_DIR}/include
 

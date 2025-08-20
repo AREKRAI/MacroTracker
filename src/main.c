@@ -38,148 +38,36 @@
 #define CLEAR_CONSOLE(...) system(CLEAR_CONSOLE_COMMAND)
 #define ENDL "\n"
 
-typedef struct {
-  MacroDatabase_t *_db;
-
-  char *_inputBuffer;
-  uint32_t _ibCount;
-  uint32_t _ibCapacity;
-
-  _Bool _running;
-
-  char *_chatHistory;
-  uint32_t _chCount;
-  uint32_t _chCapacity;
-
-  // void **element;
-  // uint32_t _elementCount;
-  // uint32_t _elementCapacity;
-} ConsoleApp_t;
-
-void ConsoleApp_clearInputBuffer(ConsoleApp_t *self) {
-  if (self->_ibCount > 0) {
-    memset(self->_inputBuffer, 0, self->_ibCount);
-  }
-
-  self->_ibCount = 1;
-  self->_inputBuffer[0] = '\0';
-}
-
-ConsoleApp_t *ConsoleApp_create() {
-  ConsoleApp_t *self = malloc(sizeof(ConsoleApp_t));
-  *self = (ConsoleApp_t) {
-    ._db = MacroDatabase_create(),
-
-    ._ibCapacity = DEFAULT_BUF_CAP,
-    ._ibCount = 0,
-    ._inputBuffer = malloc(DEFAULT_BUF_CAP),
-
-    ._chCapacity = DEFAULT_BUF_CAP,
-    ._chCount = 0,
-    ._chatHistory = malloc(DEFAULT_BUF_CAP),
-
-    ._running = true
-  };
-
-  ConsoleApp_clearInputBuffer(self);
-  memset(self->_chatHistory, '\0', self->_chCapacity);
-
-  return self;
-}
-
-void ConsoleApp_chatHistoryResize(ConsoleApp_t *self, uint32_t newLength) {
-  self->_chCount = newLength;
-
-  uint32_t oldCapacity = self->_chCapacity;
-  while (self->_chCapacity < self->_chCapacity) {
-    self->_chCapacity <<= 1;
-  }
-
-  self->_chatHistory = realloc(self->_chatHistory, self->_chCapacity);
-  memset(&self->_chatHistory[oldCapacity - 1], '\0', self->_chCapacity - oldCapacity);
-}
-
-void ConsoleApp_chatHistoryPush(ConsoleApp_t *self, const char *msg, uint32_t msgLength) {
-  uint32_t oldLength = self->_chCount;
-
-  ConsoleApp_chatHistoryResize(self, self->_chCount + msgLength);
-
-  _memccpy(&self->_chatHistory[oldLength], msg, '\0', msgLength - 1);
-
-  self->_chatHistory[self->_chCount - 1] = '\n';
-  self->_chatHistory[self->_chCount] = '\0';
-}
-
-void ConsoleApp_processCommand(ConsoleApp_t *self) {
-  if (strcmp(self->_inputBuffer, "exit") == 0) {
-    self->_running = false;
-  }
-
-  ConsoleApp_clearInputBuffer(self);
-}
-
-void ConsoleApp_pushCharToInputBuffer(ConsoleApp_t *self, char newChar) {
-  self->_inputBuffer[self->_ibCount - 1] = newChar;
-  self->_ibCount++;
-
-  while (self->_ibCapacity < self->_ibCount * sizeof(char)) {
-    self->_ibCount <<= 1;
-  }
-
-  self->_inputBuffer = realloc(self->_inputBuffer, self->_ibCapacity);
-  self->_inputBuffer[self->_ibCount - 1] = '\0';
-}
-
-void ConsoleApp_render(ConsoleApp_t *self) {
-  CLEAR_CONSOLE();
-
-  printf("%s", self->_chatHistory);
-  printf("Command: %s", self->_inputBuffer);
-  MacroDatabase_logToConsole(self->_db);
-}
-
-void ConsoleApp_run(ConsoleApp_t *self) {
-  char inputChar = '\0';
-
-  ConsoleApp_render(self);
-
-  while (self->_running && (inputChar = getc(stdin))) {
-    if (inputChar == '\n') {
-      ConsoleApp_chatHistoryPush(self, self->_inputBuffer, self->_ibCount);
-      ConsoleApp_processCommand(self);
-    } else {
-      ConsoleApp_pushCharToInputBuffer(self, inputChar);
-    }
-
-    ConsoleApp_render(self);
-  }
-}
-
-void ConsoleApp_destroy(ConsoleApp_t *self) {
-  MacroDatabase_destroy(self->_db);
-
-  free(self->_inputBuffer);
-  free(self);
-}
-
 typedef struct __GlobalUBData_t {
   mat4 projectionView;
 } _GlobalUBData_t;
 
-typedef struct __Transform2D_t {
+typedef struct __Transform_t {
   vec2 position;
-  float scale;
+  vec2 scale;
   float rotation;
-} Transform2D_t;
+} Transform_t;
+
+#define TRANSFORM_INIT (Transform_t) {   \
+    .position = { 0.f, 0.f },            \
+    .scale = {1.f, 1.f},                 \
+    .rotation = 0.f                      \
+  }
 
 typedef struct __LocalUBData2D_t {
   mat4 model;
+  vec4 color;
 } _LocalUBData2D_t;
+
+#define COLOR_WHITE {1.f, 1.f, 1.f, 1.f}
+#define COLOR_RED {1.f, 0.f, 0.f, 1.f}
 
 typedef uint32_t u32vec2[2];
 
+typedef unsigned int UC_t;
+
 typedef struct __Glyph_t {
-  unsigned char character;
+  UC_t character;
   vec2 size;
   vec2 bearing;
 
@@ -202,35 +90,33 @@ typedef union _SizeVec2_t {
 } SizeVec2_t;
 
 typedef struct _App_t {
+  struct __Draw_t {
+    FT_Library _ft;
+    FT_Face _ftFace;
+
+    GLuint _shader;
+    GLuint _quadVAO, _quadVBO, _quadEBO;
+
+    mat4 _projection;
+
+    GLuint _globalUB, _localUB;
+    _GlobalUBData_t _globalUBData;
+
+    _Glyph_t *_glyphs;
+    size_t _glyphCap, _glyphCount;
+  } _draw;
+
   GLFWwindow *_wnd;
   _Bool _running;
 
   double _lastTime;
   double _deltaTime;
 
-  GLuint _shader;
-  GLuint _quadVAO, _quadVBO, _quadEBO;
-
-  mat4 _projection;
-
   vec2 camera;
   vec2 _cameraTarget;
 
-  GLuint _globalUB, _localUB;
-  _GlobalUBData_t _globalUBData;
-
   vec2 _mouseStart;
   vec2 _spritePosition;
-
-  FT_Library _ft;
-  FT_Face _ftFace;
-
-  _Glyph_t *_glyphs;
-  size_t _glyphCount;
-
-  SizeVec2_t _atlasSize;
-  GLuint _atlasTex;
-  GLuint _altasFb;
 } App_t;
 
 #define DEFAULT_WINDOW_WIDTH 1024
@@ -261,7 +147,7 @@ void _App_framebufferResizeCallback(GLFWwindow *window, int width, int height) {
     left, right,
     bottom, top, 
     -1.f, 1.f, 
-    app->_projection
+    app->_draw._projection
   );
 
   glViewport(0, 0, width, height);
@@ -278,8 +164,8 @@ void  _App_calculateMouseTransform(App_t *app) {
   vec3 endProd;
 
 
-  glm_mat4_mulv3(app->_projection, start, 1.0, startProd);
-  glm_mat4_mulv3(app->_projection, end, 1.0, endProd);
+  glm_mat4_mulv3(app->_draw._projection, start, 1.0, startProd);
+  glm_mat4_mulv3(app->_draw._projection, end, 1.0, endProd);
 
   vec3 delta;
   glm_vec3_sub(start, end, delta);
@@ -459,14 +345,14 @@ Result_t _OpenGL_validateAndLogError(GLuint shader, const char *shaderFileName,
 #endif
 
 void _App_OpenGlCleanup(App_t *app) {
-  glDeleteProgram(app->_shader);
+  glDeleteProgram(app->_draw._shader);
 
-  glDeleteBuffers(1, &app->_quadEBO);
-  glDeleteBuffers(1, &app->_quadVBO);
+  glDeleteBuffers(1, &app->_draw._quadEBO);
+  glDeleteBuffers(1, &app->_draw._quadVBO);
 
-  glDeleteVertexArrays(1, &app->_quadVAO);
+  glDeleteVertexArrays(1, &app->_draw._quadVAO);
 
-  glDeleteBuffers(1, &app->_globalUB);
+  glDeleteBuffers(1, &app->_draw._globalUB);
 }
 
 typedef struct _Vertex2D_t {
@@ -496,33 +382,33 @@ Result_t _App_setupOpenGl(App_t *app) {
       2, 3, 0    // second triangle
   };
 
-  glCreateVertexArrays(1, &app->_quadVAO);
+  glCreateVertexArrays(1, &app->_draw._quadVAO);
   
-  glCreateBuffers(1, &app->_quadVBO);
-  glNamedBufferData(app->_quadVBO, sizeof(vertices),
+  glCreateBuffers(1, &app->_draw._quadVBO);
+  glNamedBufferData(app->_draw._quadVBO, sizeof(vertices),
     vertices, GL_STATIC_DRAW
   );
-  glVertexArrayVertexBuffer(app->_quadVAO, 0, app->_quadVBO,
+  glVertexArrayVertexBuffer(app->_draw._quadVAO, 0, app->_draw._quadVBO,
     0, sizeof(Vertex2D_t)
   );
 
-  glCreateBuffers(1, &app->_quadEBO);
-  glNamedBufferData(app->_quadEBO, sizeof(indices),
+  glCreateBuffers(1, &app->_draw._quadEBO);
+  glNamedBufferData(app->_draw._quadEBO, sizeof(indices),
     indices, GL_STATIC_DRAW
   );
-  glVertexArrayElementBuffer(app->_quadVAO, app->_quadEBO);
+  glVertexArrayElementBuffer(app->_draw._quadVAO, app->_draw._quadEBO);
 
-  glVertexArrayAttribFormat(app->_quadVAO, 0, 3, GL_FLOAT,
+  glVertexArrayAttribFormat(app->_draw._quadVAO, 0, 3, GL_FLOAT,
     GL_FALSE, offsetof(Vertex2D_t, position)
   );
-  glVertexArrayAttribBinding(app->_quadVAO, 0, 0);
-  glEnableVertexArrayAttrib(app->_quadVAO, 0);
+  glVertexArrayAttribBinding(app->_draw._quadVAO, 0, 0);
+  glEnableVertexArrayAttrib(app->_draw._quadVAO, 0);
 
-  glVertexArrayAttribFormat(app->_quadVAO, 1, 2, GL_FLOAT,
+  glVertexArrayAttribFormat(app->_draw._quadVAO, 1, 2, GL_FLOAT,
     GL_FALSE, offsetof(Vertex2D_t, tex)
   );
-  glVertexArrayAttribBinding(app->_quadVAO, 1, 0);
-  glEnableVertexArrayAttrib(app->_quadVAO, 1);
+  glVertexArrayAttribBinding(app->_draw._quadVAO, 1, 0);
+  glEnableVertexArrayAttrib(app->_draw._quadVAO, 1);
 
 
   FILE *vertFile, *fragFile;
@@ -637,20 +523,20 @@ Result_t _App_setupOpenGl(App_t *app) {
   }
 #endif
 
-  app->_shader = glCreateProgram();
-  glAttachShader(app->_shader, vertexShader);
-  glAttachShader(app->_shader, fragmentShader);
-  glLinkProgram(app->_shader);
+  app->_draw._shader = glCreateProgram();
+  glAttachShader(app->_draw._shader, vertexShader);
+  glAttachShader(app->_draw._shader, fragmentShader);
+  glLinkProgram(app->_draw._shader);
 
   glDeleteShader(vertexShader);
   glDeleteShader(fragmentShader);
 
 #ifdef APP_DEBUG
   GLint linkStatus = GL_FALSE;
-  glGetProgramiv(app->_shader, GL_LINK_STATUS, &linkStatus);
+  glGetProgramiv(app->_draw._shader, GL_LINK_STATUS, &linkStatus);
   if (linkStatus != GL_TRUE) {
     GLint requiredLogLength = 0;
-    glGetProgramiv(app->_shader, GL_INFO_LOG_LENGTH,
+    glGetProgramiv(app->_draw._shader, GL_INFO_LOG_LENGTH,
       &requiredLogLength
     );
 
@@ -661,81 +547,90 @@ Result_t _App_setupOpenGl(App_t *app) {
     
     charBuff = realloc(charBuff, charCount);
 
-    glGetShaderInfoLog(app->_shader, charCount, NULL,
+    glGetShaderInfoLog(app->_draw._shader, charCount, NULL,
       charBuff);
 
     log_error("(%u - %s : %s) link error: \"%s\"" ENDL,
-      app->_shader,
+      app->_draw._shader,
       VERT_FILE_NAME,
       FRAG_FILE_NAME,
       charBuff
     );
   } else {
     log_info("Successfully linked shader program (%u - %s : %s)" ENDL,
-      app->_shader,
+      app->_draw._shader,
       VERT_FILE_NAME,
       FRAG_FILE_NAME
     );
   }
 #endif
   
-  glCreateBuffers(1, &app->_globalUB);
-  glNamedBufferData(app->_globalUB, sizeof(_GlobalUBData_t),
-    &app->_globalUBData, GL_STATIC_DRAW
+  glCreateBuffers(1, &app->_draw._globalUB);
+  glNamedBufferData(app->_draw._globalUB, sizeof(_GlobalUBData_t),
+    &app->_draw._globalUBData, GL_STATIC_DRAW
   );
 
-  glCreateBuffers(1, &app->_localUB);
-  glNamedBufferData(app->_localUB,
+  glCreateBuffers(1, &app->_draw._localUB);
+  glNamedBufferData(app->_draw._localUB,
     sizeof(_LocalUBData2D_t), NULL, GL_STATIC_DRAW
   );
 
   return RESULT_SUCCESS;
 }
 
-#define FONT_PATH "fonts/Ldfcomicsansbold-zgma.ttf"
+#define FONT_PATH "fonts/NotoSans-SemiBold.ttf"
 #define FONT_SIZE (1 << 7)
 #define ATLAS_START_SIZE (SizeVec2_t) { 1 << 12, 1 << 12 }
 
-Result_t _App_loadGlyphs(App_t *app) {
-  if (FT_Init_FreeType(&app->_ft) != 0) {
-    log_error("Failed to init/load freetype library" ENDL);
-    return RESULT_FAIL;
+
+_Glyph_t *_Draw_getGlyph(App_t *app, UC_t character) {
+  if (character < app->_draw._glyphCount) {
+    _Glyph_t *sample = &app->_draw._glyphs[character];
+
+    if (sample->character == character) {
+      return sample;
+    }
   }
 
-  if (FT_New_Face(app->_ft, FONT_PATH, 0, &app->_ftFace)) {
-    log_error("Failed to load font at: " FONT_PATH ENDL);
-    return RESULT_FAIL;
+  size_t ucharInd = 0;
+  for (;ucharInd < app->_draw._glyphCount; ucharInd++) {
+    _Glyph_t *iglyph = &app->_draw._glyphs[ucharInd];
+    if (iglyph->character == character) {
+      return iglyph;
+    }
+
+    if (iglyph->character > character) {
+      return NULL;
+    }
   }
 
-  FT_Set_Pixel_Sizes(app->_ftFace, 0, FONT_SIZE);
-  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  return NULL;
+}
 
-  // TODO:
-  // glCreateFramebuffers(1, &app->_altasFb);
-  // glCreateTextures(GL_TEXTURE_2D, 1, &app->_atlasTex);
-  // glTextureStorage2D(app->_atlasTex, 1, GL_R8, 
-  //   ATLAS_START_SIZE.width, ATLAS_START_SIZE.height
-  // );
-  // glNamedFramebufferTexture(app->_altasFb, 
-  //   GL_COLOR_ATTACHMENT0, app->_atlasTex, 0);
+_Glyph_t *_Draw_getGlyphOrLoad(App_t *app, UC_t character) {
+  _Glyph_t *result = _Draw_getGlyph(app, character);
+  if (result != NULL) {
+    return result;
+  }
 
-  app->_glyphCount = 128;
-  app->_glyphs = malloc(sizeof(_Glyph_t) * app->_glyphCount);
+  _Draw_loadGlyph(app, character);
+  return _Draw_getGlyph(app, character);
+}
 
-  for (unsigned char c = 0; c < app->_glyphCount; c++)
-  {
-    if (FT_Load_Char(app->_ftFace, c, FT_LOAD_RENDER)) {
+Result_t _Draw_loadGlyph(App_t *app, UC_t character) {
+    if (FT_Load_Char(app->_draw._ftFace, character, FT_LOAD_RENDER)) {
       log_warn("Failed to load char %c of font " FONT_PATH ENDL);
-      continue;
+      return RESULT_FAIL;
     }
 
     // generate texture
     GLuint texture = 0;
-    if (app->_ftFace->glyph->bitmap.buffer == NULL)
+    if (app->_draw._ftFace->glyph->bitmap.buffer == NULL)
       goto skip_glyph_texture_creation;
+
     glCreateTextures(GL_TEXTURE_2D, 1, &texture);
     glTextureStorage2D(texture, 1, GL_R8,
-      app->_ftFace->glyph->bitmap.width, app->_ftFace->glyph->bitmap.rows
+      app->_draw._ftFace->glyph->bitmap.width, app->_draw._ftFace->glyph->bitmap.rows
     );
 
     // set texture options
@@ -746,44 +641,103 @@ Result_t _App_loadGlyphs(App_t *app) {
 
     glTextureSubImage2D(texture, 0, 
       0, 0,
-      app->_ftFace->glyph->bitmap.width, app->_ftFace->glyph->bitmap.rows,
-      GL_RED, GL_UNSIGNED_BYTE, app->_ftFace->glyph->bitmap.buffer
+      app->_draw._ftFace->glyph->bitmap.width, app->_draw._ftFace->glyph->bitmap.rows,
+      GL_RED, GL_UNSIGNED_BYTE, app->_draw._ftFace->glyph->bitmap.buffer
     );
 
 skip_glyph_texture_creation:
     _Glyph_t glyph = {
-      .character = c,
+      .character = character,
       .glTextureHandle = texture,
-      .isWhitespace = app->_ftFace->glyph->bitmap.buffer == NULL,
+      .isWhitespace = app->_draw._ftFace->glyph->bitmap.buffer == NULL,
       .size = { 
-        app->_ftFace->glyph->bitmap.width, 
-        app->_ftFace->glyph->bitmap.rows 
+        app->_draw._ftFace->glyph->bitmap.width, 
+        app->_draw._ftFace->glyph->bitmap.rows 
       },
       .bearing = { 
-        app->_ftFace->glyph->bitmap_left, 
-        app->_ftFace->glyph->bitmap_top 
+        app->_draw._ftFace->glyph->bitmap_left, 
+        app->_draw._ftFace->glyph->bitmap_top 
       },
       .advance = { 
-        (uint32_t)app->_ftFace->glyph->advance.x,
-        (uint32_t)app->_ftFace->glyph->advance.y 
+        (uint32_t)app->_draw._ftFace->glyph->advance.x,
+        (uint32_t)app->_draw._ftFace->glyph->advance.y 
       }
     };
 
-    app->_glyphs[c] = glyph;
+    app->_draw._glyphCount++;
+
+    while (app->_draw._glyphCap < app->_draw._glyphCount * sizeof(_Glyph_t)) {
+      app->_draw._glyphCap <<= 1;
+    }
+    app->_draw._glyphs = realloc(app->_draw._glyphs, app->_draw._glyphCap);
+
+    size_t ucharInd = 0;
+    for (;ucharInd < app->_draw._glyphCount - 1; ucharInd++) {
+      _Glyph_t *iglyph = &app->_draw._glyphs[ucharInd];
+      if (iglyph->character == character) {
+        log_error("Unicode character has already been loaded" ENDL);
+        return RESULT_FAIL;
+      }
+
+      if (iglyph->character > character) {
+        break;
+      }
+    }
+
+    size_t spaceDiff = app->_draw._glyphCount - ucharInd - 1;
+    if (spaceDiff > 0) {
+      memccpy(
+        &app->_draw._glyphs[ucharInd + 1],
+        &app->_draw._glyphs[ucharInd],
+        spaceDiff, sizeof(_Glyph_t)
+      );
+    }
+
+    app->_draw._glyphs[ucharInd] = glyph;
+
+    return RESULT_SUCCESS;
+}
+
+#define ASCII_LOAD_LIMIT 128
+
+Result_t _Draw_loadAsciiGlyphs(App_t *app) {
+  if (FT_Init_FreeType(&app->_draw._ft) != 0) {
+    log_error("Failed to init/load freetype library" ENDL);
+    return RESULT_FAIL;
+  }
+
+  if (FT_New_Face(app->_draw._ft, FONT_PATH, 0, &app->_draw._ftFace)) {
+    log_error("Failed to load font at: " FONT_PATH ENDL);
+    return RESULT_FAIL;
+  }
+
+  FT_Set_Pixel_Sizes(app->_draw._ftFace, 0, FONT_SIZE);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+  // TODO:
+  // Create texture atlas optimisations
+
+  app->_draw._glyphCount = 0,
+  app->_draw._glyphCap = DEFAULT_BUF_CAP,
+  app->_draw._glyphs = malloc(app->_draw._glyphCap),
+
+  memset(app->_draw._glyphs, 0, app->_draw._glyphCap);
+  for (UC_t character = 0; character < ASCII_LOAD_LIMIT; character++) {
+    _Draw_loadGlyph(app, character);
   }
 
   return RESULT_SUCCESS;
 }
 
 void _App_cleanupTextRenderer(App_t *app) {
-  FT_Done_Face(app->_ftFace);
-  FT_Done_FreeType(app->_ft);
+  FT_Done_Face(app->_draw._ftFace);
+  FT_Done_FreeType(app->_draw._ft);
 
-  for (size_t glyphIndex = 0; glyphIndex < app->_glyphCount; glyphIndex++) {
-    _Glyph_t *glyph = &app->_glyphs[glyphIndex];
+  for (size_t glyphIndex = 0; glyphIndex < app->_draw._glyphCount; glyphIndex++) {
+    _Glyph_t *glyph = &app->_draw._glyphs[glyphIndex];
     glDeleteTextures(1, &glyph->glTextureHandle);
   }
-  free(app->_glyphs);
+  free(app->_draw._glyphs);
 }
 
 Result_t App_create(App_t** p_app) {
@@ -808,17 +762,17 @@ Result_t App_create(App_t** p_app) {
     .camera = {0, 0},
     ._cameraTarget = {0, 0},
 
-    ._shader = 0,
+    ._draw._shader = 0,
 
-    ._quadEBO = 0,
-    ._quadVAO = 0,
-    ._quadVBO = 0,
+    ._draw = (struct __Draw_t) {
+      ._quadEBO = 0,
+      ._quadVAO = 0,
+      ._quadVBO = 0,
+      
 
-    ._glyphs = NULL,
-    ._glyphCount = 0,
-
-    ._globalUB = 0, ._localUB = 0,
-    ._globalUBData = {0},
+      ._globalUB = 0, ._localUB = 0,
+      ._globalUBData = {0},
+    },
 
     ._spritePosition = {0, 0},
     ._mouseStart = {0, 0},
@@ -840,9 +794,9 @@ Result_t App_create(App_t** p_app) {
     left, right,
     bottom, top, 
     -1.f, 1.f,
-    (*p_app)->_projection
+    (*p_app)->_draw._projection
   );
-  glm_mat4_identity((*p_app)->_globalUBData.projectionView);
+  glm_mat4_identity((*p_app)->_draw._globalUBData.projectionView);
 
   glfwSetWindowUserPointer(window, *p_app);
   glfwSetWindowCloseCallback(window, _App_windowCloseCallback);
@@ -866,7 +820,7 @@ Result_t App_create(App_t** p_app) {
     return RESULT_FAIL;
   }
 
-  if (_App_loadGlyphs(*p_app) != RESULT_SUCCESS) {
+  if (_Draw_loadAsciiGlyphs(*p_app) != RESULT_SUCCESS) {
     log_error("Failed to load glyphs" ENDL);
     return RESULT_FAIL;
   }
@@ -886,77 +840,156 @@ typedef struct __TextInfo_t {
   .vertSpacing = 0.5f,                \
   }
 
-void _App_drawText(App_t *app, const char *text,
-  const Transform2D_t transform, const TextInfo_t info) {
-  glUseProgram(app->_shader);
-  glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->_globalUB);
-  glBindVertexArray(app->_quadVAO);
+#pragma region RIPPED_FROM_GITHUB //https://gist.github.com/tylerneylon/9773800
 
-  _LocalUBData2D_t ubData = {0};
+// This macro tests if a char is a continuation byte in utf8.
+#define IS_CONT(x) (((x) & 0xc0) == 0x80)
+
+// This returns the code point encoded at **s and advances *s to point to the
+// next character. Thus it can easily be used in a loop.
+#ifdef _MSC_VER
+  #define COUNT_LEADING_BITS(x) __lzcnt(x)
+#else
+  #define COUNT_LEADING_BITS(x) __builtin_clz(x)
+#endif
+
+int decode_code_point(char **s) {
+    int k = **s ? COUNT_LEADING_BITS(~(**s << 24)) : 0; // Count # of leading 1 bits.
+    int mask = (1 << (8 - k)) - 1;                 // All 1s with k leading 0s.
+    int value = **s & mask;
+    // k = 0 for one-byte code points; otherwise, k = #total bytes.
+    for (++(*s), --k; k > 0 && IS_CONT(**s); --k, ++(*s)) {
+        value <<= 6;
+        value += (**s & 0x3F);
+    }
+    return value;
+}
+
+// This assumes that `code` is <= 0x10FFFF and ensures that nothing will be
+// written at or beyond `end`. It advances *s so it's easy to use in a loop.
+void encode_code_point(char **s, char *end, int code) {
+    char val[4];
+    int lead_byte_max = 0x7F;
+    int val_index = 0;
+    while (code > lead_byte_max) {
+        val[val_index++] = (code & 0x3F) | 0x80;
+        code >>= 6;
+        lead_byte_max >>= (val_index == 1 ? 2 : 1);
+    }
+    val[val_index++] = (code & lead_byte_max) | (~lead_byte_max << 1);
+    while (val_index-- && *s < end) {
+        **s = val[val_index];
+        (*s)++;
+    }
+}
+
+// This returns 0 if no split was needed.
+int split_into_surrogates(int code, int *surr1, int *surr2) {
+    if (code <= 0xFFFF) return 0;
+    *surr2 = 0xDC00 | (code & 0x3FF);        // Save the low 10 bits.
+    code >>= 10;                             // Drop the low 10 bits.
+    // If `code` now has low bits "uuu uuxx xxxx", then the bits of *surr are
+    // "1101 10ww wwxx xxxx" where wwww = (uuuuu - 1).
+    *surr1 = 0xD800 | ((code & 0x7FF) - 0x40);
+    return 1;
+}
+
+// This expects to be used in a loop and see all code points in *code. Start
+// *old at 0; this function updates *old for you - don't change it after
+// initialization. This returns 0 when *code is the 1st of a surrogate pair;
+// otherwise use *code as the final code point.
+int join_from_surrogates(int *old, int *code) {
+    if (*old) *code = (((*old & 0x3FF) + 0x40) << 10) + (*code & 0x3FF);
+    *old = ((*code & 0xD800) == 0xD800 ? *code : 0);
+    return !(*old);
+}
+
+#pragma endregion RIPPED_FROM_GITHUB
+
+void _Draw_text(App_t *app, const unsigned char *text,
+  const Transform_t transform, const TextInfo_t info) {
+  glUseProgram(app->_draw._shader);
+  glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->_draw._globalUB);
+  glBindVertexArray(app->_draw._quadVAO);
+
+  _LocalUBData2D_t ubData = {
+    .color = COLOR_RED,
+    .model = GLM_MAT4_IDENTITY_INIT
+  };
   vec2 lPos = { transform.position[0], transform.position[1] };
 
   int wwidth = 0, wheight = 0;
   glfwGetFramebufferSize(app->_wnd, &wwidth, &wheight);
   const float normalizationFactor = info.fontSize / 
     ((float)FONT_SIZE * wheight);
-  const float scale = transform.scale * normalizationFactor;
+  // DOESN'T TAKE X/Y SPACING INTO ACCOUNT
+  const float scaleX = transform.scale[0] * normalizationFactor;
+  const float scaleY = transform.scale[1] * normalizationFactor;
 
   uint32_t peakYAdvance = 0;
   float peakYBearing = 0;
 
-  while (*text != '\0') {
-    _Glyph_t *glyph = &app->_glyphs[*text];
-    lPos[0] += ((glyph->advance[0] >> 6) / 2.f + info.horSpacing) * scale;
+  UC_t code_point = 0;
+  while ((code_point = decode_code_point(&text)) != '\0') {
+      // Print the code point and the bytes consumed
+      // printf("Code point: U+%04X, Bytes: %zu, Character: ", code_point, bytes_consumed);
+      // for (size_t i = 0; i < bytes_consumed; i++) {
+      //     putchar(text[pos - bytes_consumed + i]);
+      // }
+      // putchar('\n');
 
-    if (glyph->isWhitespace || *text == '\n')
-      goto skip_glyph_rendering;
+      _Glyph_t *glyph = _Draw_getGlyphOrLoad(app, code_point);
+      lPos[0] += ((glyph->advance[0] >> 6) / 2.f + info.horSpacing) * scaleX;
 
-    vec3 glyphPosition = {
-      lPos[0] + glyph->bearing[0] * scale,
-      lPos[1] - (glyph->size[1] / 2.f - glyph->bearing[1]) * scale,
-      0.f
-    };
+      if (glyph->isWhitespace || code_point == '\n')
+        goto skip_glyph_rendering;
 
-    mat4 scaleMatrix = GLM_MAT4_IDENTITY_INIT;
-    mat4 transformMatrix = GLM_MAT4_IDENTITY_INIT;
-    glm_scale(scaleMatrix, 
-      (vec3) { 
-        glyph->size[0] * scale,
-        glyph->size[1] * scale,
-        1.f
-      }
-    );
+      vec3 glyphPosition = {
+        lPos[0] + glyph->bearing[0] * scaleX,
+        lPos[1] - (glyph->size[1] / 2.f - glyph->bearing[1]) * scaleY,
+        0.f
+      };
 
-    glm_translate(transformMatrix, glyphPosition);
-    mat4 rotationMatrix = GLM_MAT4_IDENTITY_INIT;
-    glm_rotate(rotationMatrix, 
-      transform.rotation * GLM_PI / 180.0, 
-      (vec3){0, 0, 1}
-    );
-    glm_mul(rotationMatrix, transformMatrix, ubData.model);
-    glm_mat4_mul(ubData.model, scaleMatrix, ubData.model);
+      mat4 scaleMatrix = GLM_MAT4_IDENTITY_INIT;
+      mat4 transformMatrix = GLM_MAT4_IDENTITY_INIT;
+      glm_scale(scaleMatrix, 
+        (vec3) { 
+          glyph->size[0] * scaleX,
+          glyph->size[1] * scaleY,
+          1.f
+        }
+      );
 
-    glNamedBufferSubData(app->_localUB, 0,
-      sizeof(_LocalUBData2D_t), &ubData
-    );
-    glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->_localUB);
-    glBindTextureUnit(0, glyph->glTextureHandle);
-    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-    
+      glm_translate(transformMatrix, glyphPosition);
+      mat4 rotationMatrix = GLM_MAT4_IDENTITY_INIT;
+      glm_rotate(rotationMatrix, 
+        transform.rotation * GLM_PI / 180.0, 
+        (vec3){0, 0, 1}
+      );
+      glm_mul(rotationMatrix, transformMatrix, ubData.model);
+      glm_mat4_mul(ubData.model, scaleMatrix, ubData.model);
+
+      glNamedBufferSubData(app->_draw._localUB, 0,
+        sizeof(_LocalUBData2D_t), &ubData
+      );
+      glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->_draw._localUB);
+      glBindTextureUnit(0, glyph->glTextureHandle);
+      glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+      
 skip_glyph_rendering:
-    lPos[0] += ((glyph->advance[0] >> 6) / 2.f) * scale;
-    
-    peakYAdvance = glyph->advance[1] > peakYAdvance ?
-      glyph->advance[1] : peakYAdvance;
+      lPos[0] += ((glyph->advance[0] >> 6) / 2.f) * scaleX;
+      
+      peakYAdvance = glyph->advance[1] > peakYAdvance ?
+        glyph->advance[1] : peakYAdvance;
 
-    peakYBearing = glyph->bearing[1] > peakYBearing ?
-      glyph->bearing[1] : peakYBearing;
-    if (*text == '\n') {
-      lPos[1] -= ((peakYAdvance >> 6) + peakYBearing + info.vertSpacing) * scale;
-      lPos[0] = transform.position[0];
-    }
-    
-    text++;
+      peakYBearing = glyph->bearing[1] > peakYBearing ?
+        glyph->bearing[1] : peakYBearing;
+      if (code_point == '\n') {
+        lPos[1] -= ((peakYAdvance >> 6) + peakYBearing + info.vertSpacing) * scaleY;
+        lPos[1] -= scaleY * info.vertSpacing;
+
+        lPos[0] = transform.position[0];
+      }
   }
 }
 
@@ -964,27 +997,36 @@ void _App_render(App_t *app) {
   glfwMakeContextCurrent(app->_wnd);
   glClear(GL_COLOR_BUFFER_BIT);
 
-  glUseProgram(app->_shader);
-  glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->_globalUB); 
-  glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->_localUB);
-  glBindTextureUnit(0, app->_glyphs['A'].glTextureHandle);
-  glBindVertexArray(app->_quadVAO);
+  glUseProgram(app->_draw._shader);
+  glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->_draw._globalUB); 
+  glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->_draw._localUB);
+  glBindTextureUnit(0, app->_draw._glyphs['A'].glTextureHandle);
+  glBindVertexArray(app->_draw._quadVAO);
   glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-  _App_drawText(app, "This shit is Epic\n we goon to femboys twin", 
-    (Transform2D_t) {
+  _Draw_text(app, "This shit is Epic\n we goon to femboys twin", 
+    (Transform_t) {
       .position = {0.5, 0.5},
       .rotation = -15.f,
-      .scale = 10.f
+      .scale = { 10.f, 1.f }
+    },
+    TEXT_INFO_INIT
+  );
+
+  _Draw_text(app, "Това е тест", 
+    (Transform_t) {
+      .position = {-0.5, -0.5},
+      .rotation = 90.f,
+      .scale = { 2.f, 2.f }
     },
     TEXT_INFO_INIT
   );
   char fpsBuffer[36];
   sprintf_s(fpsBuffer, sizeof(fpsBuffer) / sizeof(char), 
     "FPS: %.2f", (1.0 / app->_deltaTime));
-  _App_drawText(app, fpsBuffer, (Transform2D_t) {
+  _Draw_text(app, fpsBuffer, (Transform_t) {
       .position = {0.5, 0.5},
       .rotation = 0.f,
-      .scale = 1.f
+      .scale = { 1.f, 1.f }
     },
     (TextInfo_t) {
       .fontSize = 100,
@@ -995,33 +1037,26 @@ void _App_render(App_t *app) {
   glfwSwapBuffers(app->_wnd);
 }
 
+#define MOVEMENT_CUTOFF 0.5f
+
 void _App_update(App_t *app)
 {
   vec2 offset = {0, 0};
-  _Bool hasMoved = false;
 
-  if (glfwGetKey(app->_wnd, GLFW_KEY_W) == GLFW_PRESS) {
-    hasMoved = true;
+  if (glfwGetKey(app->_wnd, GLFW_KEY_W) == GLFW_PRESS)
     offset[1] += 1;
-  }
 
-  if (glfwGetKey(app->_wnd, GLFW_KEY_S) == GLFW_PRESS) {
-    hasMoved = true;
+  if (glfwGetKey(app->_wnd, GLFW_KEY_S) == GLFW_PRESS)
     offset[1] -= 1;
-  }
 
-  if (glfwGetKey(app->_wnd, GLFW_KEY_A) == GLFW_PRESS) {
-    hasMoved = true;
+  if (glfwGetKey(app->_wnd, GLFW_KEY_A) == GLFW_PRESS)
     offset[0] -= 1;
-  }
   
-  if (glfwGetKey(app->_wnd, GLFW_KEY_D) == GLFW_PRESS) {
-    hasMoved = true;
+  if (glfwGetKey(app->_wnd, GLFW_KEY_D) == GLFW_PRESS)
     offset[0] += 1;
-  }
 
-  if (hasMoved) {
-    float offsetMag = sqrtf(offset[0] * offset[0] + offset[1] * offset[1]);
+  float offsetMag = sqrtf(offset[0] * offset[0] + offset[1] * offset[1]);
+  if (offsetMag > MOVEMENT_CUTOFF) {
     float offsetMagNorm = 1.f / offsetMag;
     float transformMultiplier = 
       (float)app->_deltaTime * offsetMagNorm;
@@ -1037,22 +1072,24 @@ void _App_update(App_t *app)
   mat4 view = GLM_MAT4_IDENTITY_INIT;
   glm_translate(view, (vec3) { app->camera[0], app->camera[1], 0.0 });
 
-  glm_mat4_mul(app->_projection, view, app->_globalUBData.projectionView);
+  glm_mat4_mul(app->_draw._projection, view, app->_draw._globalUBData.projectionView);
 
   // GL CODE -> marked to find if this gets moved into its own function
   // as the number of buffers that are written to grows
   // maybe a function called "Update GL Buffers"
-  glNamedBufferSubData(app->_globalUB, 0, 
-    sizeof(_GlobalUBData_t), &app->_globalUBData
+  glNamedBufferSubData(app->_draw._globalUB, 0, 
+    sizeof(_GlobalUBData_t), &app->_draw._globalUBData
   );
 
-  _LocalUBData2D_t spriteUB = {0};
+  _LocalUBData2D_t spriteUB = {
+    .color = COLOR_WHITE
+  };
   glm_mat4_identity(spriteUB.model);
   glm_translate(spriteUB.model, 
     (vec3) { app->_spritePosition[0], app->_spritePosition[1], 0 }
   );
 
-  glNamedBufferSubData(app->_localUB, 0, 
+  glNamedBufferSubData(app->_draw._localUB, 0, 
     sizeof(_LocalUBData2D_t), &spriteUB
   );
 }

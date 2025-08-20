@@ -89,7 +89,21 @@ typedef union _SizeVec2_t {
   size_t ptr[2];
 } SizeVec2_t;
 
-typedef struct _App_t {
+typedef struct __AppInfo_t {
+  const char *name;
+  SizeVec2_t size;
+} AppInfo_t;
+
+#define DEFAULT_APP_NAME "macro"
+#define DEFAULT_WINDOW_WIDTH 1024
+#define DEFAULT_WINDOW_HEIGHT 512
+
+#define APP_INFO_INIT (AppInfo_t) {                          \
+    .name = DEFAULT_APP_NAME,                                \
+    .size = { DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT }, \
+  }
+
+typedef struct __App_t {
   struct __Draw_t {
     FT_Library _ft;
     FT_Face _ftFace;
@@ -102,6 +116,7 @@ typedef struct _App_t {
     GLuint _globalUB, _localUB;
     _GlobalUBData_t _globalUBData;
 
+    // Currently linear search
     _Glyph_t *_glyphs;
     size_t _glyphCap, _glyphCount;
   } _draw;
@@ -117,10 +132,10 @@ typedef struct _App_t {
 
   vec2 _mouseStart;
   vec2 _spritePosition;
+
+  AppInfo_t info;
 } App_t;
 
-#define DEFAULT_WINDOW_WIDTH 1024
-#define DEFAULT_WINDOW_HEIGHT 512
 
 #include "Common.h"
 
@@ -131,26 +146,6 @@ void _App_windowCloseCallback(GLFWwindow* window) {
 
   glfwSetWindowShouldClose(window, GLFW_TRUE);
   app->_running = false;
-}
-
-void _App_framebufferResizeCallback(GLFWwindow *window, int width, int height) {
-  App_t *app = glfwGetWindowUserPointer(window);
-
-  float aspect = width / (float)height;
-
-  float left = -1.f;
-  float right = 1.f;
-  float bottom = -1.f / aspect;
-  float top = 1.f / aspect;
-
-  glm_ortho(
-    left, right,
-    bottom, top, 
-    -1.f, 1.f, 
-    app->_draw._projection
-  );
-
-  glViewport(0, 0, width, height);
 }
 
 void  _App_calculateMouseTransform(App_t *app) {
@@ -204,6 +199,7 @@ void _App_keyInputCallback(GLFWwindow* window,
   app->_running = false;
 }
 
+#define SHADER_DIR "glsl\\"
 #define VERT_FILE_NAME "vert_default_2d.glsl"
 #define FRAG_FILE_NAME "frag_default_2d.glsl"
 
@@ -360,6 +356,166 @@ typedef struct _Vertex2D_t {
   vec2 tex;
 } Vertex2D_t;
 
+Result_t __Draw_loadShaderStringFromFiles(GLuint *p_program, const char *vert, const char *frag) {
+  FILE *vertFile, *fragFile;
+  GLint vertFileSize = 0, fragFileSize = 0;
+
+  errno_t err = 0;
+  if ((err = fopen_s(&vertFile, vert, "rb")) != 0 ||
+    vertFile == NULL) {
+    log_error(
+      "Couldn't create/open the vertex shader file %s, error code: %i" ENDL,
+      vert,
+      err
+    );
+
+    fclose(vertFile);
+    return RESULT_FAIL;
+  } else {
+    log_info("Opened vertex shader file: %s" ENDL, vert);
+  }
+  
+  if ((err = fopen_s(&fragFile, frag, "rb")) != 0 || 
+    fragFile == NULL) {
+    log_error(
+      "Couldn't create/open the fragment shader file %s, error code: %i" ENDL,
+      frag,
+      err
+    );
+
+    fclose(vertFile);
+    fclose(fragFile);
+    return RESULT_FAIL;
+  } else {
+    log_info("Opened fragment shader file: %s" ENDL, frag);
+  }
+
+  char *charBuff = NULL;
+
+  fseek(vertFile, 0L, SEEK_END);
+  vertFileSize = ftell(vertFile) + 1;
+
+  fseek(fragFile, 0L, SEEK_END);
+  fragFileSize = ftell(fragFile) + 1;
+
+  GLint charCount = fragFileSize > vertFileSize ?
+    fragFileSize : vertFileSize;
+
+  charCount = __intToNextPow2(charCount);
+  charBuff = malloc(charCount);
+  memset(charBuff, 0, charCount);
+
+  rewind(vertFile);
+  
+  GLint readFileSize = (GLint)fread(charBuff,
+    sizeof(char), 
+    vertFileSize - 1, 
+    vertFile
+  );
+  charBuff[vertFileSize - 1] = '\0';
+
+  GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
+  glShaderSource(vertexShader, 1, &charBuff, &readFileSize);
+  glCompileShader(vertexShader);
+  fclose(vertFile);
+
+#ifdef APP_DEBUG
+  Result_t vertResult = OPENGL_VALIDATE_AND_LOG_ERROR(vertexShader, 
+    vert, &charBuff, &charCount
+  );
+
+  if (!vertResult) {
+    log_error("Failed to compile vertex shader (%u : %s)" ENDL,
+      vertexShader,
+      vert
+    );
+
+    return RESULT_FAIL;
+  } else {
+    log_info("Successfully loaded vertex shader (%u : %s)" ENDL,
+      vertexShader,
+      vert
+    );
+  }
+#endif
+
+  rewind(fragFile);
+  // memset(charBuff, 0, charCount);
+  readFileSize = (GLint)fread(charBuff,
+    sizeof(char),
+    fragFileSize - 1, 
+    fragFile
+  );
+  charBuff[fragFileSize - 1] = '\0';
+
+  GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+  glShaderSource(fragmentShader, 1, &charBuff, &readFileSize);
+  glCompileShader(fragmentShader);
+  fclose(fragFile);
+
+#ifdef APP_DEBUG
+  Result_t fragResult = OPENGL_VALIDATE_AND_LOG_ERROR(fragmentShader,
+    frag, &charBuff, &charCount
+  );
+
+  if (!fragResult) {
+    log_error("Failed to compile fragment shader (%u : %s)" ENDL,
+      fragmentShader, frag
+    );
+    return RESULT_FAIL;
+  } else {
+    log_info("Successfully loaded fragment shader (%u : %s)" ENDL,
+      fragmentShader, frag
+    );
+  }
+#endif
+
+  *p_program = glCreateProgram();
+  glAttachShader(*p_program, vertexShader);
+  glAttachShader(*p_program, fragmentShader);
+  glLinkProgram(*p_program);
+
+  glDeleteShader(vertexShader);
+  glDeleteShader(fragmentShader);
+
+#ifdef APP_DEBUG
+  GLint linkStatus = GL_FALSE;
+  glGetProgramiv(*p_program, GL_LINK_STATUS, &linkStatus);
+  if (linkStatus != GL_TRUE) {
+    GLint requiredLogLength = 0;
+    glGetProgramiv(*p_program, GL_INFO_LOG_LENGTH,
+      &requiredLogLength
+    );
+
+    GLint greaterSize = requiredLogLength > charCount ? 
+      requiredLogLength : charCount;
+
+    charCount = __intPow2ScaleToNext(charCount, greaterSize);
+    
+    charBuff = realloc(charBuff, charCount);
+
+    glGetShaderInfoLog(*p_program, charCount, NULL,
+      charBuff);
+
+    log_error("(%u - %s : %s) link error: \"%s\"" ENDL,
+      p_program,
+      vert,
+      frag,
+      charBuff
+    );
+
+    return RESULT_FAIL;
+  } else {
+    log_info("Successfully linked shader program (%u - %s : %s)" ENDL,
+      *p_program,
+      vert,
+      frag
+    );
+  }
+#endif
+  return RESULT_SUCCESS;
+}
+
 Result_t _App_setupOpenGl(App_t *app) {
 #ifdef APP_DEBUG
   glEnable(GL_DEBUG_OUTPUT);
@@ -410,160 +566,11 @@ Result_t _App_setupOpenGl(App_t *app) {
   glVertexArrayAttribBinding(app->_draw._quadVAO, 1, 0);
   glEnableVertexArrayAttrib(app->_draw._quadVAO, 1);
 
-
-  FILE *vertFile, *fragFile;
-  GLint vertFileSize = 0, fragFileSize = 0;
-
-  errno_t err = 0;
-  if ((err = fopen_s(&vertFile, VERT_FILE_NAME, "rb")) != 0 ||
-    vertFile == NULL) {
-    log_error(
-      "Couldn't create/open the vertex shader file %s, error code: %i" ENDL,
-      VERT_FILE_NAME,
-      err
-    );
-
-    fclose(vertFile);
-    return RESULT_FAIL;
-  } else {
-    log_info("Opened vertex shader file: %s" ENDL, VERT_FILE_NAME);
-  }
-  
-  if ((err = fopen_s(&fragFile, FRAG_FILE_NAME, "rb")) != 0 || 
-    fragFile == NULL) {
-    log_error(
-      "Couldn't create/open the fragment shader file %s, error code: %i" ENDL,
-      FRAG_FILE_NAME,
-      err
-    );
-
-    fclose(vertFile);
-    fclose(fragFile);
-    return RESULT_FAIL;
-  } else {
-    log_info("Opened fragment shader file: %s" ENDL, FRAG_FILE_NAME);
-  }
-
-  char *charBuff = NULL;
-
-  fseek(vertFile, 0L, SEEK_END);
-  vertFileSize = ftell(vertFile) + 1;
-
-  fseek(fragFile, 0L, SEEK_END);
-  fragFileSize = ftell(fragFile) + 1;
-
-  GLint charCount = fragFileSize > vertFileSize ?
-    fragFileSize : vertFileSize;
-
-  charCount = __intToNextPow2(charCount);
-  charBuff = malloc(charCount);
-  memset(charBuff, 0, charCount);
-
-  rewind(vertFile);
-  
-  GLint readFileSize = (GLint)fread(charBuff,
-    sizeof(char), 
-    vertFileSize - 1, 
-    vertFile
+  __Draw_loadShaderStringFromFiles(
+    &app->_draw._shader, 
+    SHADER_DIR VERT_FILE_NAME, 
+    SHADER_DIR FRAG_FILE_NAME
   );
-  charBuff[vertFileSize - 1] = '\0';
-
-  GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
-  glShaderSource(vertexShader, 1, &charBuff, &readFileSize);
-  glCompileShader(vertexShader);
-  fclose(vertFile);
-
-#ifdef APP_DEBUG
-  Result_t vertResult = OPENGL_VALIDATE_AND_LOG_ERROR(vertexShader, 
-    VERT_FILE_NAME, &charBuff, &charCount
-  );
-
-  if (!vertResult) {
-    log_error("Failed to compile vertex shader (%u : %s)" ENDL,
-      vertexShader,
-      VERT_FILE_NAME
-    );
-    return RESULT_FAIL;
-  } else {
-    log_info("Successfully loaded vertex shader (%u : %s)" ENDL,
-      vertexShader,
-      VERT_FILE_NAME
-    );
-  }
-#endif
-
-  rewind(fragFile);
-  // memset(charBuff, 0, charCount);
-  readFileSize = (GLint)fread(charBuff,
-    sizeof(char),
-    fragFileSize - 1, 
-    fragFile
-  );
-  charBuff[fragFileSize - 1] = '\0';
-
-  GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-  glShaderSource(fragmentShader, 1, &charBuff, &readFileSize);
-  glCompileShader(fragmentShader);
-  fclose(fragFile);
-
-#ifdef APP_DEBUG
-  Result_t fragResult = OPENGL_VALIDATE_AND_LOG_ERROR(fragmentShader,
-    FRAG_FILE_NAME, &charBuff, &charCount
-  );
-
-  if (!fragResult) {
-    log_error("Failed to compile fragment shader (%u : %s)" ENDL,
-      fragmentShader, FRAG_FILE_NAME
-    );
-    return RESULT_FAIL;
-  } else {
-    log_info("Successfully loaded fragment shader (%u : %s)" ENDL,
-      fragmentShader, FRAG_FILE_NAME
-    );
-  }
-#endif
-
-  app->_draw._shader = glCreateProgram();
-  glAttachShader(app->_draw._shader, vertexShader);
-  glAttachShader(app->_draw._shader, fragmentShader);
-  glLinkProgram(app->_draw._shader);
-
-  glDeleteShader(vertexShader);
-  glDeleteShader(fragmentShader);
-
-#ifdef APP_DEBUG
-  GLint linkStatus = GL_FALSE;
-  glGetProgramiv(app->_draw._shader, GL_LINK_STATUS, &linkStatus);
-  if (linkStatus != GL_TRUE) {
-    GLint requiredLogLength = 0;
-    glGetProgramiv(app->_draw._shader, GL_INFO_LOG_LENGTH,
-      &requiredLogLength
-    );
-
-    GLint greaterSize = requiredLogLength > charCount ? 
-      requiredLogLength : charCount;
-
-    charCount = __intPow2ScaleToNext(charCount, greaterSize);
-    
-    charBuff = realloc(charBuff, charCount);
-
-    glGetShaderInfoLog(app->_draw._shader, charCount, NULL,
-      charBuff);
-
-    log_error("(%u - %s : %s) link error: \"%s\"" ENDL,
-      app->_draw._shader,
-      VERT_FILE_NAME,
-      FRAG_FILE_NAME,
-      charBuff
-    );
-  } else {
-    log_info("Successfully linked shader program (%u - %s : %s)" ENDL,
-      app->_draw._shader,
-      VERT_FILE_NAME,
-      FRAG_FILE_NAME
-    );
-  }
-#endif
   
   glCreateBuffers(1, &app->_draw._globalUB);
   glNamedBufferData(app->_draw._globalUB, sizeof(_GlobalUBData_t),
@@ -738,94 +745,6 @@ void _App_cleanupTextRenderer(App_t *app) {
     glDeleteTextures(1, &glyph->glTextureHandle);
   }
   free(app->_draw._glyphs);
-}
-
-Result_t App_create(App_t** p_app) {
-  *p_app = malloc(sizeof(App_t));
-
-  glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
-  // glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
-
-#ifdef APP_DEBUG
-  glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
-#endif
-
-  GLFWwindow *window;
-  if (!(window = glfwCreateWindow(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT, "MacroApp", NULL, NULL))) {
-    return RESULT_FAIL;
-  }
-
-  **p_app = (App_t) {
-    ._wnd = window,
-    ._running = true,
-
-    .camera = {0, 0},
-    ._cameraTarget = {0, 0},
-
-    ._draw._shader = 0,
-
-    ._draw = (struct __Draw_t) {
-      ._quadEBO = 0,
-      ._quadVAO = 0,
-      ._quadVBO = 0,
-      
-
-      ._globalUB = 0, ._localUB = 0,
-      ._globalUBData = {0},
-    },
-
-    ._spritePosition = {0, 0},
-    ._mouseStart = {0, 0},
-  };
-
-  int fbfW = 0, fbfH = 0;
-  glfwGetFramebufferSize((*p_app)->_wnd, &fbfW, &fbfH);
-
-  float aspect = fbfW / (float)fbfH;
-
-  mat4 projection = GLM_MAT4_IDENTITY_INIT;
-
-  float left = -1.f;
-  float right = 1.f;
-  float bottom = -1.f / aspect;
-  float top = 1.f / aspect;
-
-  glm_ortho(
-    left, right,
-    bottom, top, 
-    -1.f, 1.f,
-    (*p_app)->_draw._projection
-  );
-  glm_mat4_identity((*p_app)->_draw._globalUBData.projectionView);
-
-  glfwSetWindowUserPointer(window, *p_app);
-  glfwSetWindowCloseCallback(window, _App_windowCloseCallback);
-  glfwSetKeyCallback(window, _App_keyInputCallback);
-  glfwSetMouseButtonCallback(window, _App_mouseButtonCallback);
-  glfwSetFramebufferSizeCallback(window, _App_framebufferResizeCallback);
-
-  glfwMakeContextCurrent(window);
-  int glVersion = 0;
-  if (glVersion = gladLoadGL(glfwGetProcAddress)) {
-    log_info("Loaded OpenGL %d.%d" ENDL, GLAD_VERSION_MAJOR(glVersion),
-      GLAD_VERSION_MINOR(glVersion)
-    );
-  } else {
-    log_error("Failed to initialize OpenGL context" ENDL);
-    return RESULT_FAIL;
-  }
-
-  if (_App_setupOpenGl(*p_app) != RESULT_SUCCESS) {
-    log_error("Failed to setup OpenGL resources" ENDL);
-    return RESULT_FAIL;
-  }
-
-  if (_Draw_loadAsciiGlyphs(*p_app) != RESULT_SUCCESS) {
-    log_error("Failed to load glyphs" ENDL);
-    return RESULT_FAIL;
-  }
-
-  return RESULT_SUCCESS;
 }
 
 typedef struct __TextInfo_t {
@@ -1132,6 +1051,120 @@ void App_run(App_t *app) {
   }
 }
 
+void _App_framebufferResizeCallback(GLFWwindow *window, int width, int height) {
+  App_t *app = glfwGetWindowUserPointer(window);
+
+  float aspect = width / (float)height;
+
+  float left = -1.f;
+  float right = 1.f;
+  float bottom = -1.f / aspect;
+  float top = 1.f / aspect;
+
+  glm_ortho(
+    left, right,
+    bottom, top, 
+    -1.f, 1.f, 
+    app->_draw._projection
+  );
+
+  glViewport(0, 0, width, height);
+
+
+  _App_update(app);
+  _App_render(app);
+}
+
+Result_t App_create(App_t** p_app, AppInfo_t info) {
+  *p_app = malloc(sizeof(App_t));
+
+  glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+  // glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
+
+#ifdef APP_DEBUG
+  glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
+#endif
+
+  GLFWwindow *window;
+  if (!(window = glfwCreateWindow(info.size.width, info.size.height, info.name, NULL, NULL))) {
+    return RESULT_FAIL;
+  }
+
+  **p_app = (App_t) {
+    ._wnd = window,
+    ._running = true,
+
+    .camera = {0, 0},
+    ._cameraTarget = {0, 0},
+
+    ._draw._shader = 0,
+
+    ._draw = (struct __Draw_t) {
+      ._quadEBO = 0,
+      ._quadVAO = 0,
+      ._quadVBO = 0,
+      
+
+      ._globalUB = 0, ._localUB = 0,
+      ._globalUBData = {0},
+    },
+
+    ._spritePosition = {0, 0},
+    ._mouseStart = {0, 0},
+
+    .info = info
+  };
+
+  int fbfW = 0, fbfH = 0;
+  glfwGetFramebufferSize((*p_app)->_wnd, &fbfW, &fbfH);
+
+  float aspect = fbfW / (float)fbfH;
+
+  mat4 projection = GLM_MAT4_IDENTITY_INIT;
+
+  float left = -1.f;
+  float right = 1.f;
+  float bottom = -1.f / aspect;
+  float top = 1.f / aspect;
+
+  glm_ortho(
+    left, right,
+    bottom, top, 
+    -1.f, 1.f,
+    (*p_app)->_draw._projection
+  );
+  glm_mat4_identity((*p_app)->_draw._globalUBData.projectionView);
+
+  glfwSetWindowUserPointer(window, *p_app);
+  glfwSetWindowCloseCallback(window, _App_windowCloseCallback);
+  glfwSetKeyCallback(window, _App_keyInputCallback);
+  glfwSetMouseButtonCallback(window, _App_mouseButtonCallback);
+  glfwSetFramebufferSizeCallback(window, _App_framebufferResizeCallback);
+
+  glfwMakeContextCurrent(window);
+  int glVersion = 0;
+  if (glVersion = gladLoadGL(glfwGetProcAddress)) {
+    log_info("Loaded OpenGL %d.%d" ENDL, GLAD_VERSION_MAJOR(glVersion),
+      GLAD_VERSION_MINOR(glVersion)
+    );
+  } else {
+    log_error("Failed to initialize OpenGL context" ENDL);
+    return RESULT_FAIL;
+  }
+
+  if (_App_setupOpenGl(*p_app) != RESULT_SUCCESS) {
+    log_error("Failed to setup OpenGL resources" ENDL);
+    return RESULT_FAIL;
+  }
+
+  if (_Draw_loadAsciiGlyphs(*p_app) != RESULT_SUCCESS) {
+    log_error("Failed to load glyphs" ENDL);
+    return RESULT_FAIL;
+  }
+
+  return RESULT_SUCCESS;
+}
+
 #define LOG_FILE_NAME "macro_runtime_log.txt"
 
 int main(void) {
@@ -1158,7 +1191,7 @@ int main(void) {
   }
 
   App_t *app = NULL;
-  if (App_create(&app) != RESULT_SUCCESS) {
+  if (App_create(&app, APP_INFO_INIT) != RESULT_SUCCESS) {
     log_info("Program failed at app creation" ENDL);
 
     App_destroy(app);

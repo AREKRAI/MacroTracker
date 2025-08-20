@@ -127,8 +127,8 @@ typedef struct __App_t {
   double _lastTime;
   double _deltaTime;
 
-  vec2 camera;
-  vec2 _cameraTarget;
+  _Bool _camMoving;
+  vec2 camera, _camNew, _camStart;
 
   vec2 _mouseStart;
   vec2 _spritePosition;
@@ -148,25 +148,29 @@ void _App_windowCloseCallback(GLFWwindow* window) {
   app->_running = false;
 }
 
-void  _App_calculateMouseTransform(App_t *app) {
-  double mx, my;
-  glfwGetCursorPos(app->_wnd, &mx, &my);
+#define CAMERA_MOVE_STRENGTH 0.5f
 
-  vec3 start = {app->_mouseStart[0], app->_mouseStart[1], 0};
-  vec3 end = {(float)mx, (float)my, 0};
+void  _App_updateCamera(App_t *app) {
+  if (app->_camMoving) {
+    double mx, my;
+    glfwGetCursorPos(app->_wnd, &mx, &my);
 
-  vec3 startProd;
-  vec3 endProd;
+    vec3 cPos = {0};
+    glm_mat4_mulv3(app->_draw._projection, (vec2){mx, my}, 1.0, cPos);
 
+    vec3 delta;
+    glm_vec3_sub(app->_mouseStart, cPos, delta);
+    glm_vec3_scale(delta, CAMERA_MOVE_STRENGTH * app->_deltaTime, delta);
 
-  glm_mat4_mulv3(app->_draw._projection, start, 1.0, startProd);
-  glm_mat4_mulv3(app->_draw._projection, end, 1.0, endProd);
+    glm_vec2_sub(app->_camStart, (vec2) {delta[0], -delta[1]}, app->_camNew);
+  }
 
-  vec3 delta;
-  glm_vec3_sub(start, end, delta);
-  glm_vec3_scale(delta, 0.001f, delta);
-
-  glm_vec2_sub(app->camera, (vec2) {delta[0], -delta[1]}, app->_cameraTarget);
+  glm_vec2_lerp(
+    (vec2) { app->camera[0], app->camera[1] },
+    app->_camNew,
+    app->_deltaTime,
+    app->camera
+  );
 }
 
 void _App_mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
@@ -178,11 +182,14 @@ void _App_mouseButtonCallback(GLFWwindow* window, int button, int action, int mo
   if (action == GLFW_PRESS) {
     double my, mx;
     glfwGetCursorPos(window, &mx, &my);
-    app->_mouseStart[0] = (float)mx;
-    app->_mouseStart[1] = (float)my;
-  }
 
-  _App_calculateMouseTransform(app);
+    glm_mat4_mulv3(app->_draw._projection, (vec2){mx, my}, 1.0, app->_mouseStart);
+    memccpy(app->_camStart, app->camera, 1, sizeof(vec2));
+    memccpy(app->_camNew, app->camera, 1, sizeof(vec2));
+    app->_camMoving = true;
+  } else {
+    app->_camMoving = false;
+  }
 }
 
 void _App_keyInputCallback(GLFWwindow* window,
@@ -960,6 +967,8 @@ void _App_render(App_t *app) {
 
 void _App_update(App_t *app)
 {
+  _App_updateCamera(app);
+
   vec2 offset = {0, 0};
 
   if (glfwGetKey(app->_wnd, GLFW_KEY_W) == GLFW_PRESS)
@@ -984,9 +993,6 @@ void _App_update(App_t *app)
     
     glm_vec2_add(app->_spritePosition, offset, app->_spritePosition);
   }
-
-
-  glm_vec2_lerp(app->camera, app->_cameraTarget, (float)app->_deltaTime, app->camera);
 
   mat4 view = GLM_MAT4_IDENTITY_INIT;
   glm_translate(view, (vec3) { app->camera[0], app->camera[1], 0.0 });
@@ -1035,14 +1041,18 @@ void App_destroy(App_t *app) {
 void App_run(App_t *app) {
   app->_lastTime = glfwGetTime();
 
+  double my, mx;
+  glfwGetCursorPos(app->_wnd, &mx, &my);
+
+  glm_mat4_mulv3(app->_draw._projection, (vec2){mx, my}, 1.0, app->_mouseStart);
   while (app->_running) {
     double newTime = glfwGetTime();
 
+    glfwPollEvents();
     app->_deltaTime = newTime - app->_lastTime;
     if (app->_deltaTime < FRAME_TIME) {
       continue;
     }
-    glfwPollEvents();
 
     _App_update(app);
     _App_render(app);
@@ -1095,7 +1105,8 @@ Result_t App_create(App_t** p_app, AppInfo_t info) {
     ._running = true,
 
     .camera = {0, 0},
-    ._cameraTarget = {0, 0},
+    ._camNew = {0, 0},
+    ._camMoving = false,
 
     ._draw._shader = 0,
 

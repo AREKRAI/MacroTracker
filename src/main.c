@@ -38,6 +38,19 @@
 #define CLEAR_CONSOLE(...) system(CLEAR_CONSOLE_COMMAND)
 #define ENDL "\n"
 
+// UNUSED
+typedef struct __StrView_t {
+  size_t count;
+  char *str;
+} StrView_t;
+
+// UNUSED
+typedef struct __Str_t {
+  size_t count;
+  size_t cap;
+  char *str;
+} Str_t;
+
 typedef struct __GlobalUBData_t {
   mat4 projectionView;
 } _GlobalUBData_t;
@@ -53,6 +66,29 @@ typedef struct __Transform_t {
     .scale = {1.f, 1.f},                 \
     .rotation = 0.f                      \
   }
+
+void Transform_toMat4(Transform_t *self, mat4 matrix) {
+  glm_mat4_identity(matrix);
+
+  mat4 scale = GLM_MAT4_IDENTITY_INIT;
+  glm_scale(
+    scale, 
+    self->scale
+  );
+
+  mat4 translation = GLM_MAT4_IDENTITY_INIT;
+  glm_translate(translation, self->position);
+
+  mat4 rotation = GLM_MAT4_IDENTITY_INIT;
+  glm_rotate(
+      rotation, 
+    self->rotation * GLM_PI / 180.0, 
+    (vec3){0, 0, 1}
+  );
+
+  glm_mul(rotation, translation, matrix);
+  glm_mat4_mul(matrix, scale, matrix);
+}
 
 typedef struct __LocalUBData2D_t {
   mat4 model;
@@ -103,12 +139,100 @@ typedef struct __AppInfo_t {
     .size = { DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT }, \
   }
 
+typedef enum __UiElType_t {
+  UI_EL_TYPE_CONTAINER = 0,
+  UI_EL_TYPE_TEXT = 1,
+  UI_EL_TYPE_BUTTON = 2,
+  UI_EL_TYPE_INPUT = 3
+} UiElType_t;
+
+#define DEFAULT_CHILD_CAP ((size_t)1 << 7)
+
+typedef struct __UiInfo_t {
+  UiElType_t type;
+
+  Transform_t local;
+  vec4 color;
+} UiInfo_t;
+
+typedef struct __UI_t {
+  struct __UI_t *children, *parent;
+  size_t childCount, childCap;
+
+  mat4 matrix;
+
+  UiInfo_t info;
+} UI_t;
+
+void _UI_updateTransforms(UI_t *self) {
+  mat4 tempTransformMatrix;
+  Transform_toMat4(&self->info.local, tempTransformMatrix);
+
+  if (self->parent == NULL) {
+    glm_mat4_copy(tempTransformMatrix, self->matrix);
+    return;
+  }
+
+  glm_mat4_mul(self->parent->matrix, tempTransformMatrix, self->matrix);
+  for (UI_t *child = self->children;
+    child < &self->children[self->childCount]; child++) {
+      _UI_updateTransforms(child);
+  }
+}
+
+Result_t UI_init(UI_t *self, UiInfo_t info, UI_t *parent) {
+  self->childCap = DEFAULT_CHILD_CAP;
+  self->children = malloc(self->childCap);
+  self->childCount = 0;
+
+  self->info = info;
+  memccpy(&self->info, &info, sizeof(UiInfo_t), 1);
+  self->parent = parent;
+
+  _UI_updateTransforms(self);
+  return EXIT_SUCCESS;
+}
+
+Result_t UI_addChild(UI_t *self, UiInfo_t info) {
+  self->childCount++;
+  while (self->childCount * sizeof(UI_t) > self->childCap) {
+    self->childCap <<= 1;
+  }
+
+  self->children = realloc(self->children, self->childCap);
+  UI_init(&self->children[self->childCount - 1], info, self);
+  self->children[self->childCount - 1].parent = self;
+
+  // Maybe update transforms
+  return RESULT_SUCCESS;
+}
+
+void UI_destroy(UI_t *self) {
+  for (UI_t *child = self->children;
+    child < &self->children[self->childCount]; child++) {
+      UI_destroy(child);
+  }
+
+  free(self->children);
+}
+
+void UI_setTransform(UI_t *self, Transform_t *newTransform) {
+  self->info.local = (Transform_t) {
+    .position = {newTransform->position[0], newTransform->position[1]},
+    .rotation = newTransform->rotation,
+    .scale = {newTransform->scale[0], newTransform->scale[1]}
+  };
+
+  _UI_updateTransforms(self);
+}
+
 typedef struct __App_t {
   struct __Draw_t {
     FT_Library _ft;
     FT_Face _ftFace;
 
-    GLuint _shader;
+    // TODO: implement flatShader
+    GLuint _texShader, _flatShader;
     GLuint _quadVAO, _quadVBO, _quadEBO;
 
     mat4 _projection;
@@ -133,6 +257,11 @@ typedef struct __App_t {
   vec2 _mouseStart;
   vec2 _spritePosition;
 
+  char *input;
+  size_t _inCount, _inCap;
+
+  UI_t _uiRoot;
+
   AppInfo_t info;
 } App_t;
 
@@ -141,7 +270,7 @@ typedef struct __App_t {
 
 #define BASE_SPEED 2.f
 
-void _App_windowCloseCallback(GLFWwindow* window) {
+void _App_wndCloseCBCK(GLFWwindow* window) {
   App_t *app = glfwGetWindowUserPointer(window);
 
   glfwSetWindowShouldClose(window, GLFW_TRUE);
@@ -173,7 +302,7 @@ void  _App_updateCamera(App_t *app) {
   );
 }
 
-void _App_mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
+void _App_wndMouseBtnCBCK(GLFWwindow* window, int button, int action, int mods) {
   if (button != GLFW_MOUSE_BUTTON_1) {
     return;
   }
@@ -183,7 +312,11 @@ void _App_mouseButtonCallback(GLFWwindow* window, int button, int action, int mo
     double my, mx;
     glfwGetCursorPos(window, &mx, &my);
 
-    glm_mat4_mulv3(app->_draw._projection, (vec2){mx, my}, 1.0, app->_mouseStart);
+    vec3 out = {0, 0, 0};
+    glm_mat4_mulv3(app->_draw._projection, (vec2){mx, my}, 1.0, out);
+    app->_mouseStart[0] = out[0];
+    app->_mouseStart[1] = out[1];
+
     memccpy(app->_camStart, app->camera, 1, sizeof(vec2));
     memccpy(app->_camNew, app->camera, 1, sizeof(vec2));
     app->_camMoving = true;
@@ -192,12 +325,16 @@ void _App_mouseButtonCallback(GLFWwindow* window, int button, int action, int mo
   }
 }
 
-void _App_keyInputCallback(GLFWwindow* window,
+void _App_wndInputCBCK(GLFWwindow* window,
     int key, int scancode, int action, int mods) {
   App_t *app = glfwGetWindowUserPointer(window);
 
   if (action != GLFW_PRESS)
     return;
+
+  if (key == GLFW_KEY_BACKSPACE) {
+    // TODO: implement removing chars
+  }
   
   if (key != GLFW_KEY_ESCAPE)
     return;
@@ -293,22 +430,14 @@ void APIENTRY _App_OpenGL_debugMsgCallback(GLenum source, GLenum type, GLuint id
 }
 #endif
 
-GLint __intToNextPow2(GLint val) {
-  GLint out = 1;
+int32_t __intToNextPow2(int32_t val) {
+  int32_t out = 1;
   
   while (out < val) {
     out <<= 1;
   }
 
   return out;
-}
-
-GLint __intPow2ScaleToNext(GLint prev, GLint val) {
-  while (prev < val) {
-    prev <<= 1;
-  }
-
-  return prev;
 }
 
 Result_t _OpenGL_validateAndLogError(GLuint shader, const char *shaderFileName,
@@ -323,7 +452,9 @@ Result_t _OpenGL_validateAndLogError(GLuint shader, const char *shaderFileName,
     GLint greaterSize = requiredLogLength > *p_buffSize ? 
       requiredLogLength : *p_buffSize;
 
-    *p_buffSize = __intPow2ScaleToNext(*p_buffSize, greaterSize);
+    while (*p_buffSize < greaterSize) {
+      *p_buffSize <<= 1;
+    }
     
     *p_charBuff = realloc(*p_charBuff, *p_buffSize);
 
@@ -348,7 +479,8 @@ Result_t _OpenGL_validateAndLogError(GLuint shader, const char *shaderFileName,
 #endif
 
 void _App_OpenGlCleanup(App_t *app) {
-  glDeleteProgram(app->_draw._shader);
+  glDeleteProgram(app->_draw._texShader);
+  glDeleteProgram(app->_draw._flatShader);
 
   glDeleteBuffers(1, &app->_draw._quadEBO);
   glDeleteBuffers(1, &app->_draw._quadVBO);
@@ -376,7 +508,6 @@ Result_t __Draw_loadShaderStringFromFiles(GLuint *p_program, const char *vert, c
       err
     );
 
-    fclose(vertFile);
     return RESULT_FAIL;
   } else {
     log_info("Opened vertex shader file: %s" ENDL, vert);
@@ -391,7 +522,6 @@ Result_t __Draw_loadShaderStringFromFiles(GLuint *p_program, const char *vert, c
     );
 
     fclose(vertFile);
-    fclose(fragFile);
     return RESULT_FAIL;
   } else {
     log_info("Opened fragment shader file: %s" ENDL, frag);
@@ -497,7 +627,9 @@ Result_t __Draw_loadShaderStringFromFiles(GLuint *p_program, const char *vert, c
     GLint greaterSize = requiredLogLength > charCount ? 
       requiredLogLength : charCount;
 
-    charCount = __intPow2ScaleToNext(charCount, greaterSize);
+    while (charCount < greaterSize) {
+      charCount <<= 1;
+    }
     
     charBuff = realloc(charBuff, charCount);
 
@@ -574,9 +706,15 @@ Result_t _App_setupOpenGl(App_t *app) {
   glEnableVertexArrayAttrib(app->_draw._quadVAO, 1);
 
   __Draw_loadShaderStringFromFiles(
-    &app->_draw._shader, 
+    &app->_draw._texShader, 
     SHADER_DIR VERT_FILE_NAME, 
     SHADER_DIR FRAG_FILE_NAME
+  );
+
+  __Draw_loadShaderStringFromFiles(
+    &app->_draw._flatShader,
+    SHADER_DIR "vert_flat_2d.glsl",
+    SHADER_DIR "frag_flat_2d.glsl"
   );
   
   glCreateBuffers(1, &app->_draw._globalUB);
@@ -832,9 +970,36 @@ int join_from_surrogates(int *old, int *code) {
 
 #pragma endregion RIPPED_FROM_GITHUB
 
+void _App_wndCharCBCK(GLFWwindow* window, unsigned int character) {
+  App_t *app = glfwGetWindowUserPointer(window);
+
+  char encoded[4];
+  int lead_byte_max = 0x7F;
+  int encoded_index = 0;
+  while (character > lead_byte_max) {
+      encoded[encoded_index++] = (character & 0x3F) | 0x80;
+      character >>= 6;
+      lead_byte_max >>= (encoded_index == 1 ? 2 : 1);
+  }
+  encoded[encoded_index++] = (character & lead_byte_max) | (~lead_byte_max << 1);
+
+  // +1 for null terminator 
+  app->_inCount += encoded_index;
+  while (app->_inCap < app->_inCount) {
+    app->_inCap <<= 1;
+  }
+  app->input = realloc(app->input, app->_inCap);
+
+  while (encoded_index--) {
+    app->input[app->_inCount - encoded_index - 1] = encoded[encoded_index];
+  }
+
+  app->input[app->_inCount] = '\0';
+}
+
 void _Draw_text(App_t *app, const unsigned char *text,
   const Transform_t transform, const TextInfo_t info) {
-  glUseProgram(app->_draw._shader);
+  glUseProgram(app->_draw._texShader);
   glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->_draw._globalUB);
   glBindVertexArray(app->_draw._quadVAO);
 
@@ -871,29 +1036,22 @@ void _Draw_text(App_t *app, const unsigned char *text,
         goto skip_glyph_rendering;
 
       vec3 glyphPosition = {
-        lPos[0] + glyph->bearing[0] * scaleX,
-        lPos[1] - (glyph->size[1] / 2.f - glyph->bearing[1]) * scaleY,
         0.f
       };
 
-      mat4 scaleMatrix = GLM_MAT4_IDENTITY_INIT;
-      mat4 transformMatrix = GLM_MAT4_IDENTITY_INIT;
-      glm_scale(scaleMatrix, 
-        (vec3) { 
+      Transform_t trans = {
+        .rotation = transform.rotation,
+        .position = {
+          lPos[0] + glyph->bearing[0] * scaleX,
+          lPos[1] - (glyph->size[1] / 2.f - glyph->bearing[1]) * scaleY
+        },
+        .scale = {
           glyph->size[0] * scaleX,
-          glyph->size[1] * scaleY,
-          1.f
+          glyph->size[1] * scaleY
         }
-      );
+      };
 
-      glm_translate(transformMatrix, glyphPosition);
-      mat4 rotationMatrix = GLM_MAT4_IDENTITY_INIT;
-      glm_rotate(rotationMatrix, 
-        transform.rotation * GLM_PI / 180.0, 
-        (vec3){0, 0, 1}
-      );
-      glm_mul(rotationMatrix, transformMatrix, ubData.model);
-      glm_mat4_mul(ubData.model, scaleMatrix, ubData.model);
+      Transform_toMat4(&trans, ubData.model);
 
       glNamedBufferSubData(app->_draw._localUB, 0,
         sizeof(_LocalUBData2D_t), &ubData
@@ -919,16 +1077,49 @@ skip_glyph_rendering:
   }
 }
 
+void _Draw_UI(App_t* app, UI_t *ui) {
+  _LocalUBData2D_t ubData = {0};
+  glm_mat4_copy(ui->matrix, ubData.model);
+  glm_vec4_copy(ui->info.color, ubData.color);
+
+  glNamedBufferSubData(app->_draw._localUB, 0,
+    sizeof(_LocalUBData2D_t), &ubData
+  );
+
+  glUseProgram(app->_draw._flatShader);
+  glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->_draw._globalUB); 
+  glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->_draw._localUB);
+  glBindVertexArray(app->_draw._quadVAO);
+  glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+  for (UI_t *child = ui->children;
+    child < &ui->children[ui->childCount]; child++) {
+    _Draw_UI(app, child);
+  }
+}
+
 void _App_render(App_t *app) {
   glfwMakeContextCurrent(app->_wnd);
   glClear(GL_COLOR_BUFFER_BIT);
 
-  glUseProgram(app->_draw._shader);
+  _LocalUBData2D_t spriteUB = {
+    .color = {0.75, 0.0, 0.5, 1.0},
+    .model = GLM_MAT4_IDENTITY_INIT
+  };
+  glm_translate(spriteUB.model, 
+    (vec3) { app->_spritePosition[0], app->_spritePosition[1], 0 }
+  );
+
+  glNamedBufferSubData(app->_draw._localUB, 0, 
+    sizeof(_LocalUBData2D_t), &spriteUB
+  );
+
+  glUseProgram(app->_draw._flatShader);
   glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->_draw._globalUB); 
   glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->_draw._localUB);
-  glBindTextureUnit(0, app->_draw._glyphs['A'].glTextureHandle);
   glBindVertexArray(app->_draw._quadVAO);
   glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
   _Draw_text(app, "This shit is Epic\n we goon to femboys twin", 
     (Transform_t) {
       .position = {0.5, 0.5},
@@ -946,9 +1137,22 @@ void _App_render(App_t *app) {
     },
     TEXT_INFO_INIT
   );
+
+  _Draw_text(app, app->input, 
+    (Transform_t) {
+      .position = {0.f, 0.f},
+      .rotation = 0.f,
+      .scale = { 10.f, 10.f }
+    },
+    TEXT_INFO_INIT
+  );
+
   char fpsBuffer[36];
   sprintf_s(fpsBuffer, sizeof(fpsBuffer) / sizeof(char), 
     "FPS: %.2f", (1.0 / app->_deltaTime));
+  
+  _Draw_UI(app, &app->_uiRoot);
+
   _Draw_text(app, fpsBuffer, (Transform_t) {
       .position = {0.5, 0.5},
       .rotation = 0.f,
@@ -960,6 +1164,8 @@ void _App_render(App_t *app) {
       .vertSpacing = 1.f
     }
   );
+
+
   glfwSwapBuffers(app->_wnd);
 }
 
@@ -971,16 +1177,16 @@ void _App_update(App_t *app)
 
   vec2 offset = {0, 0};
 
-  if (glfwGetKey(app->_wnd, GLFW_KEY_W) == GLFW_PRESS)
+  if (glfwGetKey(app->_wnd, GLFW_KEY_UP) == GLFW_PRESS)
     offset[1] += 1;
 
-  if (glfwGetKey(app->_wnd, GLFW_KEY_S) == GLFW_PRESS)
+  if (glfwGetKey(app->_wnd, GLFW_KEY_DOWN) == GLFW_PRESS)
     offset[1] -= 1;
 
-  if (glfwGetKey(app->_wnd, GLFW_KEY_A) == GLFW_PRESS)
+  if (glfwGetKey(app->_wnd, GLFW_KEY_LEFT) == GLFW_PRESS)
     offset[0] -= 1;
   
-  if (glfwGetKey(app->_wnd, GLFW_KEY_D) == GLFW_PRESS)
+  if (glfwGetKey(app->_wnd, GLFW_KEY_RIGHT) == GLFW_PRESS)
     offset[0] += 1;
 
   float offsetMag = sqrtf(offset[0] * offset[0] + offset[1] * offset[1]);
@@ -1006,20 +1212,11 @@ void _App_update(App_t *app)
     sizeof(_GlobalUBData_t), &app->_draw._globalUBData
   );
 
-  _LocalUBData2D_t spriteUB = {
-    .color = COLOR_WHITE
-  };
-  glm_mat4_identity(spriteUB.model);
-  glm_translate(spriteUB.model, 
-    (vec3) { app->_spritePosition[0], app->_spritePosition[1], 0 }
-  );
-
-  glNamedBufferSubData(app->_draw._localUB, 0, 
-    sizeof(_LocalUBData2D_t), &spriteUB
-  );
 }
 
 void App_destroy(App_t *app) {
+  UI_destroy(&app->_uiRoot);
+
   if (app == NULL) {
     log_warn("App is set to NULL");
     return;
@@ -1044,7 +1241,12 @@ void App_run(App_t *app) {
   double my, mx;
   glfwGetCursorPos(app->_wnd, &mx, &my);
 
-  glm_mat4_mulv3(app->_draw._projection, (vec2){mx, my}, 1.0, app->_mouseStart);
+  vec3 out = {0, 0, 0};
+  glm_mat4_mulv3(app->_draw._projection, (vec2){mx, my}, 1.0, out);
+  app->_mouseStart[0] = out[0];
+  app->_mouseStart[1] = out[1];
+
+  // TODO: compartmentalize the time code, so it can run in the resize callback
   while (app->_running) {
     double newTime = glfwGetTime();
 
@@ -1061,7 +1263,7 @@ void App_run(App_t *app) {
   }
 }
 
-void _App_framebufferResizeCallback(GLFWwindow *window, int width, int height) {
+void _App_wndFbResizeCBCK(GLFWwindow *window, int width, int height) {
   App_t *app = glfwGetWindowUserPointer(window);
 
   float aspect = width / (float)height;
@@ -1108,13 +1310,13 @@ Result_t App_create(App_t** p_app, AppInfo_t info) {
     ._camNew = {0, 0},
     ._camMoving = false,
 
-    ._draw._shader = 0,
-
     ._draw = (struct __Draw_t) {
       ._quadEBO = 0,
       ._quadVAO = 0,
       ._quadVBO = 0,
-      
+
+      ._texShader = 0,
+      ._flatShader = 0,
 
       ._globalUB = 0, ._localUB = 0,
       ._globalUBData = {0},
@@ -1123,8 +1325,13 @@ Result_t App_create(App_t** p_app, AppInfo_t info) {
     ._spritePosition = {0, 0},
     ._mouseStart = {0, 0},
 
-    .info = info
+    .info = info,
+    .input = malloc(DEFAULT_BUF_CAP),
+    ._inCap = DEFAULT_BUF_CAP,
+    ._inCount = 0,
   };
+
+  (*p_app)->input[0] = '\0';
 
   int fbfW = 0, fbfH = 0;
   glfwGetFramebufferSize((*p_app)->_wnd, &fbfW, &fbfH);
@@ -1147,10 +1354,11 @@ Result_t App_create(App_t** p_app, AppInfo_t info) {
   glm_mat4_identity((*p_app)->_draw._globalUBData.projectionView);
 
   glfwSetWindowUserPointer(window, *p_app);
-  glfwSetWindowCloseCallback(window, _App_windowCloseCallback);
-  glfwSetKeyCallback(window, _App_keyInputCallback);
-  glfwSetMouseButtonCallback(window, _App_mouseButtonCallback);
-  glfwSetFramebufferSizeCallback(window, _App_framebufferResizeCallback);
+  glfwSetWindowCloseCallback(window, _App_wndCloseCBCK);
+  glfwSetKeyCallback(window, _App_wndInputCBCK);
+  glfwSetMouseButtonCallback(window, _App_wndMouseBtnCBCK);
+  glfwSetFramebufferSizeCallback(window, _App_wndFbResizeCBCK);
+  glfwSetCharCallback(window, _App_wndCharCBCK);
 
   glfwMakeContextCurrent(window);
   int glVersion = 0;
@@ -1172,6 +1380,26 @@ Result_t App_create(App_t** p_app, AppInfo_t info) {
     log_error("Failed to load glyphs" ENDL);
     return RESULT_FAIL;
   }
+
+  UI_init(&(*p_app)->_uiRoot, (UiInfo_t) {
+    .color = COLOR_WHITE,
+    .local = (Transform_t) {
+      .position = {0.f, 0.f},
+      .rotation = 20.f,
+      .scale = {0.5f, 1.f}
+    },
+    .type = UI_EL_TYPE_CONTAINER
+  }, NULL);
+
+  UI_addChild(&(*p_app)->_uiRoot, (UiInfo_t) {
+    .color = COLOR_RED,
+    .local = (Transform_t) {
+      .position = {0.f, 0.f},
+      .rotation = 0.f,
+      .scale = {0.5f, 0.5f}
+    },
+    .type = UI_EL_TYPE_CONTAINER,
+  });
 
   return RESULT_SUCCESS;
 }

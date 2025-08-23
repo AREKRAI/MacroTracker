@@ -27,6 +27,9 @@ add_executable(macro ${SRCS} ${DEP_SRCS})
 
 add_compile_options("$<$<C_COMPILER_ID:MSVC>:/utf-8>")
 
+# set_property(TARGET macro PROPERTY
+#   MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 target_include_directories(macro PRIVATE
   ${CMAKE_SOURCE_DIR}/include
 

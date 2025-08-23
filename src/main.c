@@ -19,24 +19,7 @@
 #include <stb_image.h>
 
 #include <log.h>
-
 #include "MacroDatabase.h"
-
-#if defined(WINDOWS) || defined(_WIN32) || defined(_WIN64)
-  #define APP_WINDOWS true
-  #define CLEAR_CONSOLE_COMMAND "cls"
-#else
-    // Assume POSIX
-    #define APP_POSIX true
-    #define CLEAR_CONSOLE_COMMAND "clear"
-#endif
-
-#ifdef _DEBUG
-  #define APP_DEBUG true
-#endif
-
-#define CLEAR_CONSOLE(...) system(CLEAR_CONSOLE_COMMAND)
-#define ENDL "\n"
 
 // UNUSED
 typedef struct __StrView_t {
@@ -50,6 +33,36 @@ typedef struct __Str_t {
   size_t cap;
   char *str;
 } Str_t;
+
+#define STR_TO_VIEW(str) ((StrView_t) { .count = str.count, .str = str.str })
+
+Str_t *Str_create() {
+  return NULL;
+}
+
+size_t __Str_getCharSize(const char *src) {
+  return -1;
+}
+
+Str_t *Str_createFromLiteral(const char *src) {
+  Str_t *self = malloc(sizeof(Str_t));
+  *self = (Str_t) {
+    .count = 0,
+    .str = NULL,
+    .cap = 1,
+  };
+  
+  self->count = strlen(src);
+
+  DEBUG_ASSERT(self->count > 0, "Invalid string supplied");
+
+  while (self->cap < self->count) {
+    self->cap <<= 1;
+  }
+
+  // self->str = malloc(self->)
+  return NULL;
+}
 
 typedef struct __GlobalUBData_t {
   mat4 projectionView;
@@ -70,24 +83,20 @@ typedef struct __Transform_t {
 void Transform_toMat4(Transform_t *self, mat4 matrix) {
   glm_mat4_identity(matrix);
 
-  mat4 scale = GLM_MAT4_IDENTITY_INIT;
-  glm_scale(
-    scale, 
-    self->scale
-  );
-
-  mat4 translation = GLM_MAT4_IDENTITY_INIT;
-  glm_translate(translation, self->position);
-
-  mat4 rotation = GLM_MAT4_IDENTITY_INIT;
   glm_rotate(
-      rotation, 
-    self->rotation * GLM_PI / 180.0, 
+    matrix, 
+    (self->rotation / 180.f)* GLM_PI, 
     (vec3){0, 0, 1}
   );
 
-  glm_mul(rotation, translation, matrix);
-  glm_mat4_mul(matrix, scale, matrix);
+  glm_translate(matrix, self->position);
+  glm_scale(matrix, self->scale);
+}
+
+void Transform_copy(Transform_t *self, Transform_t other) {
+  memcpy(self->position, other.position, sizeof(vec2));
+  memcpy(self->scale, other.scale, sizeof(vec2));
+  memcpy(&self->rotation, &other.rotation, sizeof(float));
 }
 
 typedef struct __LocalUBData2D_t {
@@ -95,12 +104,7 @@ typedef struct __LocalUBData2D_t {
   vec4 color;
 } _LocalUBData2D_t;
 
-#define COLOR_WHITE {1.f, 1.f, 1.f, 1.f}
-#define COLOR_RED {1.f, 0.f, 0.f, 1.f}
-
 typedef uint32_t u32vec2[2];
-
-typedef unsigned int UC_t;
 
 typedef struct __Glyph_t {
   UC_t character;
@@ -148,62 +152,128 @@ typedef enum __UiElType_t {
 
 #define DEFAULT_CHILD_CAP ((size_t)1 << 7)
 
-typedef struct __UiInfo_t {
-  UiElType_t type;
-
-  Transform_t local;
-  vec4 color;
-} UiInfo_t;
-
+// TODO: ADD GLOBAL TRANSFORM, THAT ON SET OF TRANSFORM TAKES EVERY CHILD'S GLOBAL AND ACCUMULATES IT
+// THEN CALCULATE THE TRANSFORM BASED ON THAT AND THE LOCAL
 typedef struct __UI_t {
   struct __UI_t *children, *parent;
   size_t childCount, childCap;
 
-  mat4 matrix;
+  UiElType_t _type;
+  void *_unique;
 
-  UiInfo_t info;
+  vec2 _size, _globalSize;
+  vec2 _pos, _globalPos;
+  float _rot, _globalRot;
+
+  vec4 _color;
+  mat4 _matrix;
 } UI_t;
 
-void _UI_updateTransforms(UI_t *self) {
-  mat4 tempTransformMatrix;
-  Transform_toMat4(&self->info.local, tempTransformMatrix);
+typedef struct __UiInfo_t {
+  UiElType_t type;
 
-  if (self->parent == NULL) {
-    glm_mat4_copy(tempTransformMatrix, self->matrix);
-    return;
+  vec2 position, size;
+  vec4 color;
+  float rotation;
+
+  UI_t *parent;
+} UiInfo_t;
+
+void __UI_calculateMatrix(UI_t *self, vec2 viewportSize) {
+  float aspect = viewportSize[0] / viewportSize[1];
+  glm_mat4_identity(self->_matrix);
+
+  glm_rotate(
+    self->_matrix, 
+    (self->_globalRot / 180.f)* GLM_PI, 
+    (vec3){0, 0, 1}
+  );
+
+  vec3 trueSize = {0, 0, 0};
+  memcpy(trueSize, self->_globalSize, sizeof(trueSize));
+  glm_vec2_scale(trueSize, aspect, trueSize);
+  
+  // TODO: ACCOUNT FOR ALL PARENTS TRUE SIZE
+  vec3 truePos = {0, 0, 0};
+  memcpy(truePos, self->_globalPos, sizeof(truePos));
+  glm_vec2_scale(truePos, aspect, truePos);
+  truePos[1] -= trueSize[1] * 0.5f;
+  glm_translate(self->_matrix, truePos);
+
+  glm_scale(self->_matrix, trueSize);
+}
+
+void __UI_updateMatrix(UI_t *self, vec2 viewportSize) {
+  // Update globals to locals
+  memcpy(self->_globalPos, self->_pos, sizeof(self->_globalPos));
+  memcpy(self->_globalSize, self->_size, sizeof(self->_globalSize));
+  self->_globalRot = self->_rot;
+
+  if (self->parent != NULL) {
+    glm_vec2_mul(self->_globalPos, self->parent->_globalPos, self->_globalPos);
+    glm_vec2_mul(self->_globalSize, self->parent->_globalSize, self->_globalSize);
+    self->_globalRot += self->parent->_globalRot;
   }
 
-  glm_mat4_mul(self->parent->matrix, tempTransformMatrix, self->matrix);
+  __UI_calculateMatrix(self, viewportSize);
   for (UI_t *child = self->children;
     child < &self->children[self->childCount]; child++) {
-      _UI_updateTransforms(child);
+      __UI_updateMatrix(child, viewportSize);
   }
 }
 
-Result_t UI_init(UI_t *self, UiInfo_t info, UI_t *parent) {
+void UI_setPosition(UI_t *self, vec2 newPosition, vec2 viewportSize) {
+  memcpy(self->_pos, newPosition, sizeof(vec2));
+  __UI_updateMatrix(self, viewportSize);
+}
+
+void UI_setSize(UI_t *self, vec2 newSize, vec2 viewportSize) {
+  DEBUG_ASSERT(
+    newSize[0] <= 1.f && newSize[1] <= 1.f,
+    "Size cannot exceed 1.f"
+  );
+  DEBUG_ASSERT(
+    newSize[0] > 0.f && newSize[1] > 0.f,
+    "Size cannot be set to 0"
+  );
+
+  memcpy(self->_size, newSize, sizeof(vec2));
+  __UI_updateMatrix(self, viewportSize);
+}
+
+void UI_setRotation(UI_t *self, float newRotation, vec2 viewportSize) {
+  self->_rot = newRotation;
+  __UI_updateMatrix(self, viewportSize);
+}
+
+Result_t UI_init(UI_t *self, UiInfo_t *info, vec2 viewportSize) {
   self->childCap = DEFAULT_CHILD_CAP;
   self->children = malloc(self->childCap);
   self->childCount = 0;
 
-  self->info = info;
-  memccpy(&self->info, &info, sizeof(UiInfo_t), 1);
-  self->parent = parent;
+  self->_type = info->type;
+  self->parent = info->parent;
+  self->_rot = info->rotation;
 
-  _UI_updateTransforms(self);
+  memcpy(self->_pos, info->position, sizeof(vec2));
+  memcpy(self->_size, info->size, sizeof(vec2));
+  memcpy(self->_color, info->color, sizeof(vec4));
+
+  __UI_updateMatrix(self, viewportSize);
   return EXIT_SUCCESS;
 }
 
-Result_t UI_addChild(UI_t *self, UiInfo_t info) {
+Result_t UI_addChild(UI_t *self, UiInfo_t *info, vec2 viewportSize) {
   self->childCount++;
   while (self->childCount * sizeof(UI_t) > self->childCap) {
     self->childCap <<= 1;
   }
-
   self->children = realloc(self->children, self->childCap);
-  UI_init(&self->children[self->childCount - 1], info, self);
-  self->children[self->childCount - 1].parent = self;
 
-  // Maybe update transforms
+  UI_t *child = &self->children[self->childCount - 1];
+  info->parent = self;
+  UI_init(child, info, viewportSize);
+
   return RESULT_SUCCESS;
 }
 
@@ -213,17 +283,14 @@ void UI_destroy(UI_t *self) {
       UI_destroy(child);
   }
 
+  switch (self->_type) {
+    case UI_EL_TYPE_CONTAINER:
+      break;
+    default:
+      break;
+  }
+
   free(self->children);
-}
-
-void UI_setTransform(UI_t *self, Transform_t *newTransform) {
-  self->info.local = (Transform_t) {
-    .position = {newTransform->position[0], newTransform->position[1]},
-    .rotation = newTransform->rotation,
-    .scale = {newTransform->scale[0], newTransform->scale[1]}
-  };
-
-  _UI_updateTransforms(self);
 }
 
 typedef struct __App_t {
@@ -265,7 +332,6 @@ typedef struct __App_t {
   AppInfo_t info;
 } App_t;
 
-
 #include "Common.h"
 
 #define BASE_SPEED 2.f
@@ -279,19 +345,29 @@ void _App_wndCloseCBCK(GLFWwindow* window) {
 
 #define CAMERA_MOVE_STRENGTH 0.5f
 
+void _App_getWorldMousePos(App_t *app, vec2 result) {
+  double my, mx;
+  glfwGetCursorPos(app->_wnd, &mx, &my);
+
+  vec3 out = {0, 0, 0};
+  glm_mat4_mulv3(app->_draw._globalUBData.projectionView, (vec2){mx, my}, 1.0, out);
+
+  result[0] = out[0];
+  result[1] = out[1];
+}
+
 void  _App_updateCamera(App_t *app) {
   if (app->_camMoving) {
-    double mx, my;
-    glfwGetCursorPos(app->_wnd, &mx, &my);
+    vec2 cPos = {0};
+    _App_getWorldMousePos(app, cPos);
 
-    vec3 cPos = {0};
-    glm_mat4_mulv3(app->_draw._projection, (vec2){mx, my}, 1.0, cPos);
+    vec2 delta = {0};
+    glm_vec2_sub(cPos, app->_mouseStart, delta);
+    
+    delta[0] *= -1.f; // IDK I'M DUMB
+    glm_vec2_scale(delta, CAMERA_MOVE_STRENGTH * app->_deltaTime, delta);
 
-    vec3 delta;
-    glm_vec3_sub(app->_mouseStart, cPos, delta);
-    glm_vec3_scale(delta, CAMERA_MOVE_STRENGTH * app->_deltaTime, delta);
-
-    glm_vec2_sub(app->_camStart, (vec2) {delta[0], -delta[1]}, app->_camNew);
+    glm_vec2_sub(app->_camStart, delta, app->_camNew);
   }
 
   glm_vec2_lerp(
@@ -309,16 +385,10 @@ void _App_wndMouseBtnCBCK(GLFWwindow* window, int button, int action, int mods) 
 
   App_t *app = glfwGetWindowUserPointer(window);
   if (action == GLFW_PRESS) {
-    double my, mx;
-    glfwGetCursorPos(window, &mx, &my);
+    _App_getWorldMousePos(app, app->_mouseStart);
 
-    vec3 out = {0, 0, 0};
-    glm_mat4_mulv3(app->_draw._projection, (vec2){mx, my}, 1.0, out);
-    app->_mouseStart[0] = out[0];
-    app->_mouseStart[1] = out[1];
-
-    memccpy(app->_camStart, app->camera, 1, sizeof(vec2));
-    memccpy(app->_camNew, app->camera, 1, sizeof(vec2));
+    memcpy(app->_camStart, app->camera, sizeof(vec2));
+    memcpy(app->_camNew, app->camera, sizeof(vec2));
     app->_camMoving = true;
   } else {
     app->_camMoving = false;
@@ -838,10 +908,10 @@ skip_glyph_texture_creation:
 
     size_t spaceDiff = app->_draw._glyphCount - ucharInd - 1;
     if (spaceDiff > 0) {
-      memccpy(
+      memcpy(
         &app->_draw._glyphs[ucharInd + 1],
         &app->_draw._glyphs[ucharInd],
-        spaceDiff, sizeof(_Glyph_t)
+        sizeof(_Glyph_t)
       );
     }
 
@@ -1078,9 +1148,14 @@ skip_glyph_rendering:
 }
 
 void _Draw_UI(App_t* app, UI_t *ui) {
+  glm_mat4_copy(app->_draw._projection, app->_draw._globalUBData.projectionView);
+  glNamedBufferSubData(app->_draw._globalUB, 0,
+    sizeof(_GlobalUBData_t), &app->_draw._globalUBData
+  );
+
   _LocalUBData2D_t ubData = {0};
-  glm_mat4_copy(ui->matrix, ubData.model);
-  glm_vec4_copy(ui->info.color, ubData.color);
+  glm_mat4_copy(ui->_matrix, ubData.model);
+  glm_vec4_copy(ui->_color, ubData.color);
 
   glNamedBufferSubData(app->_draw._localUB, 0,
     sizeof(_LocalUBData2D_t), &ubData
@@ -1151,8 +1226,6 @@ void _App_render(App_t *app) {
   sprintf_s(fpsBuffer, sizeof(fpsBuffer) / sizeof(char), 
     "FPS: %.2f", (1.0 / app->_deltaTime));
   
-  _Draw_UI(app, &app->_uiRoot);
-
   _Draw_text(app, fpsBuffer, (Transform_t) {
       .position = {0.5, 0.5},
       .rotation = 0.f,
@@ -1165,8 +1238,34 @@ void _App_render(App_t *app) {
     }
   );
 
-
+  _Draw_UI(app, &app->_uiRoot);
   glfwSwapBuffers(app->_wnd);
+}
+
+Result_t _App_initUI(App_t *app) {
+  UiInfo_t info = {
+    .color = COLOR_RED,
+    .parent = NULL,
+    .position = {0, 0},
+    .size = {1.0, 0.25},
+    .rotation = 0.f,
+    .type = UI_EL_TYPE_CONTAINER
+  };
+
+  int fbW = 0, fbH = 0;
+  glfwGetFramebufferSize(app->_wnd, &fbW, &fbH);
+
+  UI_init(&app->_uiRoot, &info, (vec2) {fbW, fbH});
+
+  info.color[1] = 1.f;
+  info.color[2] = 1.f;
+  UI_addChild(&app->_uiRoot, &info, (vec2) {fbW, fbH});
+
+  return RESULT_SUCCESS;
+}
+
+void _App_cleanupUI(App_t *app) {
+  UI_destroy(&app->_uiRoot);
 }
 
 #define MOVEMENT_CUTOFF 0.5f
@@ -1215,15 +1314,13 @@ void _App_update(App_t *app)
 }
 
 void App_destroy(App_t *app) {
-  UI_destroy(&app->_uiRoot);
-
   if (app == NULL) {
     log_warn("App is set to NULL");
     return;
   }
 
+  _App_cleanupUI(app);
   _App_cleanupTextRenderer(app);
-
   _App_OpenGlCleanup(app);
   
   if (app->_wnd != NULL)
@@ -1237,27 +1334,22 @@ void App_destroy(App_t *app) {
 
 void App_run(App_t *app) {
   app->_lastTime = glfwGetTime();
-
-  double my, mx;
-  glfwGetCursorPos(app->_wnd, &mx, &my);
-
-  vec3 out = {0, 0, 0};
-  glm_mat4_mulv3(app->_draw._projection, (vec2){mx, my}, 1.0, out);
-  app->_mouseStart[0] = out[0];
-  app->_mouseStart[1] = out[1];
+  _App_getWorldMousePos(app, app->_mouseStart);
 
   // TODO: compartmentalize the time code, so it can run in the resize callback
   while (app->_running) {
     double newTime = glfwGetTime();
-
-    glfwPollEvents();
-    app->_deltaTime = newTime - app->_lastTime;
-    if (app->_deltaTime < FRAME_TIME) {
+    double delta = newTime - app->_lastTime;
+    if (delta < FRAME_TIME) {
       continue;
     }
 
-    _App_update(app);
+    app->_deltaTime = delta;
+    glfwPollEvents();
+
+
     _App_render(app);
+    _App_update(app);
 
     app->_lastTime = newTime;
   }
@@ -1281,10 +1373,18 @@ void _App_wndFbResizeCBCK(GLFWwindow *window, int width, int height) {
   );
 
   glViewport(0, 0, width, height);
+  __UI_updateMatrix(&app->_uiRoot, (vec2) {width, height});
 
+  _App_render(app);
+  double newTime = glfwGetTime();
+  double delta = newTime - app->_lastTime;
+  if (delta < FRAME_TIME) {
+    return;
+  }
+  app->_deltaTime = delta;
 
   _App_update(app);
-  _App_render(app);
+  app->_lastTime = newTime;
 }
 
 Result_t App_create(App_t** p_app, AppInfo_t info) {
@@ -1381,25 +1481,10 @@ Result_t App_create(App_t** p_app, AppInfo_t info) {
     return RESULT_FAIL;
   }
 
-  UI_init(&(*p_app)->_uiRoot, (UiInfo_t) {
-    .color = COLOR_WHITE,
-    .local = (Transform_t) {
-      .position = {0.f, 0.f},
-      .rotation = 20.f,
-      .scale = {0.5f, 1.f}
-    },
-    .type = UI_EL_TYPE_CONTAINER
-  }, NULL);
-
-  UI_addChild(&(*p_app)->_uiRoot, (UiInfo_t) {
-    .color = COLOR_RED,
-    .local = (Transform_t) {
-      .position = {0.f, 0.f},
-      .rotation = 0.f,
-      .scale = {0.5f, 0.5f}
-    },
-    .type = UI_EL_TYPE_CONTAINER,
-  });
+  if (_App_initUI(*p_app) != RESULT_SUCCESS) {
+    log_error("Failed to initialize app ui" ENDL);
+    return RESULT_FAIL;
+  }
 
   return RESULT_SUCCESS;
 }

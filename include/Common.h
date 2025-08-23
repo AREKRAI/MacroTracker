@@ -14,4 +14,46 @@ typedef enum _Result {
 #error "Linux and MacOS not supported"
 #endif
 
+#if defined(WINDOWS) || defined(_WIN32) || defined(_WIN64)
+  #define APP_WINDOWS true
+  #define CLEAR_CONSOLE_COMMAND "cls"
+#else
+    // Assume POSIX
+    #define APP_POSIX true
+    #define CLEAR_CONSOLE_COMMAND "clear"
+#endif
+
+#ifdef _DEBUG
+  #define APP_DEBUG true
+#endif
+
+#define CLEAR_CONSOLE(...) system(CLEAR_CONSOLE_COMMAND)
+#define ENDL "\n"
+
+#define EXPR_STR(expr) #expr
+
+#ifdef _MSC_VER
+  #define DEBUG_BREAK() __debugbreak()
+#else
+  #error "No other compiler supported"
+#endif
+
+#include <log.h>
+
+#ifdef APP_DEBUG
+#define DEBUG_ASSERT(expr, ...) do {                                       \
+  if (expr) break;                                                            \
+  log_error("Expression (" EXPR_STR(expr) ") has failed: ", __VA_ARGS__); \
+  DEBUG_BREAK();                                                              \
+  } while (0)
+#else
+#define DEBUG_ASSERT(...)
+#endif
+
+#define COLOR_WHITE {1.f, 1.f, 1.f, 1.f}
+#define COLOR_RED {1.f, 0.f, 0.f, 1.f}
+
+// UNICODE CHARACTER
+typedef unsigned int UC_t;
+
 #endif

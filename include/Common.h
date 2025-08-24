@@ -43,7 +43,7 @@ typedef enum _Result {
 #ifdef APP_DEBUG
 #define DEBUG_ASSERT(expr, ...) do {                                       \
   if (expr) break;                                                            \
-  log_error("Expression (" EXPR_STR(expr) ") has failed: ", __VA_ARGS__); \
+  log_error("Expression (" EXPR_STR(expr) ") has failed: " ENDL, __VA_ARGS__); \
   DEBUG_BREAK();                                                              \
   } while (0)
 #else

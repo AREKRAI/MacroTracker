@@ -19,7 +19,9 @@
 #include <stb_image.h>
 
 #include <log.h>
+
 #include "MacroDatabase.h"
+#include "Common.h"
 
 // UNUSED
 typedef struct __StrView_t {
@@ -152,8 +154,6 @@ typedef enum __UiElType_t {
 
 #define DEFAULT_CHILD_CAP ((size_t)1 << 7)
 
-// TODO: ADD GLOBAL TRANSFORM, THAT ON SET OF TRANSFORM TAKES EVERY CHILD'S GLOBAL AND ACCUMULATES IT
-// THEN CALCULATE THE TRANSFORM BASED ON THAT AND THE LOCAL
 typedef struct __UI_t {
   struct __UI_t *children, *parent;
   size_t childCount, childCap;
@@ -163,8 +163,8 @@ typedef struct __UI_t {
 
   vec2 _size, _globalSize;
   vec2 _pos, _globalPos;
-  float _rot, _globalRot;
 
+  vec4 color;
   vec4 _color;
   mat4 _matrix;
 } UI_t;
@@ -174,7 +174,6 @@ typedef struct __UiInfo_t {
 
   vec2 position, size;
   vec4 color;
-  float rotation;
 
   UI_t *parent;
 } UiInfo_t;
@@ -183,36 +182,25 @@ void __UI_calculateMatrix(UI_t *self, vec2 viewportSize) {
   float aspect = viewportSize[0] / viewportSize[1];
   glm_mat4_identity(self->_matrix);
 
-  glm_rotate(
-    self->_matrix, 
-    (self->_globalRot / 180.f)* GLM_PI, 
-    (vec3){0, 0, 1}
-  );
-
   vec3 trueSize = {0, 0, 0};
   memcpy(trueSize, self->_globalSize, sizeof(trueSize));
-  glm_vec2_scale(trueSize, aspect, trueSize);
+  glm_scale(self->_matrix, trueSize);
   
-  // TODO: ACCOUNT FOR ALL PARENTS TRUE SIZE
   vec3 truePos = {0, 0, 0};
   memcpy(truePos, self->_globalPos, sizeof(truePos));
-  glm_vec2_scale(truePos, aspect, truePos);
-  truePos[1] -= trueSize[1] * 0.5f;
+
   glm_translate(self->_matrix, truePos);
 
-  glm_scale(self->_matrix, trueSize);
 }
 
 void __UI_updateMatrix(UI_t *self, vec2 viewportSize) {
   // Update globals to locals
   memcpy(self->_globalPos, self->_pos, sizeof(self->_globalPos));
   memcpy(self->_globalSize, self->_size, sizeof(self->_globalSize));
-  self->_globalRot = self->_rot;
 
   if (self->parent != NULL) {
-    glm_vec2_mul(self->_globalPos, self->parent->_globalPos, self->_globalPos);
     glm_vec2_mul(self->_globalSize, self->parent->_globalSize, self->_globalSize);
-    self->_globalRot += self->parent->_globalRot;
+    glm_vec2_add(self->parent->_globalPos, self->_globalPos, self->_globalPos);
   }
 
   __UI_calculateMatrix(self, viewportSize);
@@ -229,20 +217,12 @@ void UI_setPosition(UI_t *self, vec2 newPosition, vec2 viewportSize) {
 
 void UI_setSize(UI_t *self, vec2 newSize, vec2 viewportSize) {
   DEBUG_ASSERT(
-    newSize[0] <= 1.f && newSize[1] <= 1.f,
-    "Size cannot exceed 1.f"
-  );
-  DEBUG_ASSERT(
+    newSize[0] < 1.01f && newSize[1] < 1.01f &&
     newSize[0] > 0.f && newSize[1] > 0.f,
-    "Size cannot be set to 0"
+    "Size cannot exceed 1.f or be less than 0.f"
   );
 
   memcpy(self->_size, newSize, sizeof(vec2));
-  __UI_updateMatrix(self, viewportSize);
-}
-
-void UI_setRotation(UI_t *self, float newRotation, vec2 viewportSize) {
-  self->_rot = newRotation;
   __UI_updateMatrix(self, viewportSize);
 }
 
@@ -253,17 +233,17 @@ Result_t UI_init(UI_t *self, UiInfo_t *info, vec2 viewportSize) {
 
   self->_type = info->type;
   self->parent = info->parent;
-  self->_rot = info->rotation;
 
   memcpy(self->_pos, info->position, sizeof(vec2));
   memcpy(self->_size, info->size, sizeof(vec2));
+  memcpy(self->color, info->color, sizeof(vec4));
   memcpy(self->_color, info->color, sizeof(vec4));
 
   __UI_updateMatrix(self, viewportSize);
   return EXIT_SUCCESS;
 }
 
-Result_t UI_addChild(UI_t *self, UiInfo_t *info, vec2 viewportSize) {
+UI_t *UI_addChild(UI_t *self, UiInfo_t *info, vec2 viewportSize) {
   self->childCount++;
   while (self->childCount * sizeof(UI_t) > self->childCap) {
     self->childCap <<= 1;
@@ -274,7 +254,7 @@ Result_t UI_addChild(UI_t *self, UiInfo_t *info, vec2 viewportSize) {
   info->parent = self;
   UI_init(child, info, viewportSize);
 
-  return RESULT_SUCCESS;
+  return child;
 }
 
 void UI_destroy(UI_t *self) {
@@ -284,13 +264,71 @@ void UI_destroy(UI_t *self) {
   }
 
   switch (self->_type) {
+    case UI_EL_TYPE_BUTTON:
     case UI_EL_TYPE_CONTAINER:
+      free(self->_unique);
+      self->_unique = NULL;
       break;
     default:
       break;
   }
 
   free(self->children);
+}
+
+typedef enum __ContainerFlag_t {
+  CONTAINER_FLAG_NONE = 0,
+  CONTAINER_FLAG_ORDER_VERTICAL = 1,
+  CONTAINER_FLAG_ORDER_HORIZONTAL = 2
+} ContainerFlag_t;
+
+typedef struct __UiContainer_t {
+  ContainerFlag_t flags;
+  // TODO: float _offsetAccumulation;
+} UiContainer_t;
+
+typedef struct __UiContainerInfo_t {
+  ContainerFlag_t flags;
+  vec4 color;
+
+  vec2 position, size;
+} UiContainerInfo_t;
+
+void __UI_initContainer(UI_t *self, UiContainerInfo_t *specInfo) {
+  UiContainer_t *unique = (self->_unique = malloc(sizeof(UiContainer_t)));
+  *unique = (UiContainer_t) {
+    .flags = specInfo->flags
+  };
+}
+
+UI_t *UI_addChildContainer(UI_t *self, UiContainerInfo_t *specInfo, vec2 viewportSize) {
+  UiInfo_t genInfo = {
+    .type = UI_EL_TYPE_CONTAINER,
+    .parent = NULL,
+  };
+
+  DEBUG_ASSERT(
+    sizeof(genInfo.color) == sizeof(specInfo->color), 
+    "genInfo.color and specInfo->color must be of same type"
+  );
+  memcpy(genInfo.color, specInfo->color, sizeof(genInfo.color));
+
+  DEBUG_ASSERT(
+    sizeof(genInfo.position) == sizeof(specInfo->position), 
+    "genInfo.position and specInfo->position must be of same type"
+  );
+  memcpy(genInfo.position, specInfo->position, sizeof(genInfo.position));
+
+  DEBUG_ASSERT(
+    sizeof(genInfo.size) == sizeof(specInfo->size), 
+    "genInfo.size and specInfo->size must be of same type"
+  );
+  memcpy(genInfo.size, specInfo->size, sizeof(genInfo.size));
+
+  UI_t *child = UI_addChild(self, &genInfo, viewportSize);
+  __UI_initContainer(child, specInfo);
+
+  return child;
 }
 
 typedef struct __App_t {
@@ -302,7 +340,7 @@ typedef struct __App_t {
     GLuint _texShader, _flatShader;
     GLuint _quadVAO, _quadVBO, _quadEBO;
 
-    mat4 _projection;
+    mat4 _projection, _view;
 
     GLuint _globalUB, _localUB;
     _GlobalUBData_t _globalUBData;
@@ -332,7 +370,112 @@ typedef struct __App_t {
   AppInfo_t info;
 } App_t;
 
-#include "Common.h"
+typedef void(*UiCBCK_t)(App_t *, UI_t *);
+
+typedef struct __UiButton_t {
+  vec4 onHoverColor;
+  UiCBCK_t onClick;
+} UiButton_t;
+
+typedef struct __UiButtonInfo_t {
+  vec4 color;
+  vec4 onHoverColor;
+  UiCBCK_t onClick;
+
+  vec2 position, size;
+} UiButtonInfo_t;
+
+void __UI_initButton(UI_t *self, UiButtonInfo_t *specInfo) {
+  UiButton_t *unique = (self->_unique = malloc(sizeof(UiButton_t)));
+  *unique = (UiButton_t) {
+    .onClick = specInfo->onClick,
+  };
+
+  DEBUG_ASSERT(
+    sizeof(unique->onHoverColor) == sizeof(specInfo->onHoverColor),
+    "UiButton_t.onHoverColor must be of same type as UiButtonInfo_t.onHoverColor - vec4(cglm)"
+  );
+  memcpy(unique->onHoverColor, specInfo->onHoverColor, sizeof(unique->onHoverColor));
+}
+
+UI_t *UI_addChildButton(UI_t *self, UiButtonInfo_t *specInfo, vec2 viewportSize) {
+  UiInfo_t genInfo = {
+    .type = UI_EL_TYPE_BUTTON,
+    .parent = NULL,
+  };
+
+  DEBUG_ASSERT(
+    sizeof(genInfo.color) == sizeof(specInfo->color), 
+    "genInfo.color and specInfo->color must be of same type"
+  );
+  memcpy(genInfo.color, specInfo->color, sizeof(genInfo.color));
+
+  DEBUG_ASSERT(
+    sizeof(genInfo.position) == sizeof(specInfo->position), 
+    "genInfo.position and specInfo->position must be of same type"
+  );
+  memcpy(genInfo.position, specInfo->position, sizeof(genInfo.position));
+
+  DEBUG_ASSERT(
+    sizeof(genInfo.size) == sizeof(specInfo->size), 
+    "genInfo.size and specInfo->size must be of same type"
+  );
+  memcpy(genInfo.size, specInfo->size, sizeof(genInfo.size));
+
+  UI_t *child = UI_addChild(self, &genInfo, viewportSize);
+  __UI_initButton(child, specInfo);
+
+  return child;
+}
+
+void UI_processMouseMove(UI_t* self, vec2 mouseWorldPos) {
+  for (UI_t *child = self->children;
+    child < &self->children[self->childCount]; child++) {
+      UI_processMouseMove(child, mouseWorldPos);
+  }
+
+  UiButton_t *unique = self->_unique;
+
+  vec2 bottomLeft = {0};
+  vec2 topRight = {0};
+  glm_vec2_copy(bottomLeft, self->_globalPos);
+  glm_vec2_copy(topRight, self->_globalPos);
+  glm_vec2_add(topRight, self->_globalSize, topRight);
+
+  _Bool hovered = mouseWorldPos[0] < topRight[0] &&
+    mouseWorldPos[0] > bottomLeft[0];
+  hovered = hovered && 
+    (mouseWorldPos[1] < topRight[1] && mouseWorldPos[1] > bottomLeft[1]);
+
+  switch (self->_type) {
+    case UI_EL_TYPE_BUTTON: {
+      if (hovered) {
+        memcpy(self->_color, unique->onHoverColor, sizeof(self->_color));
+      } else {
+        memcpy(self->_color, self->color, sizeof(self->_color));
+      }
+      
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+#define FPS_LIMIT 144
+#define FRAME_TIME (1.0 / FPS_LIMIT)
+
+_Bool __App_frameTimeElapsed(App_t *app) {
+  double newTime = glfwGetTime();
+  double delta = newTime - app->_lastTime;
+  if (delta < FRAME_TIME) {
+    return false;
+  }
+
+  app->_deltaTime = delta;
+  app->_lastTime = newTime;
+  return true;
+}
 
 #define BASE_SPEED 2.f
 
@@ -345,21 +488,31 @@ void _App_wndCloseCBCK(GLFWwindow* window) {
 
 #define CAMERA_MOVE_STRENGTH 0.5f
 
-void _App_getWorldMousePos(App_t *app, vec2 result) {
+void _App_getMouseWorldPosition(App_t *app, vec2 result) {
   double my, mx;
   glfwGetCursorPos(app->_wnd, &mx, &my);
 
-  vec3 out = {0, 0, 0};
-  glm_mat4_mulv3(app->_draw._globalUBData.projectionView, (vec2){mx, my}, 1.0, out);
+  int fbW = 0, fbH = 0;
+  glfwGetFramebufferSize(app->_wnd, &fbW, &fbH);
 
-  result[0] = out[0];
-  result[1] = out[1];
+  vec3 cursorPos = {0};
+  vec4 viewport = {0.0f, 0.0f, (float)fbW, (float)fbH};
+
+  glm_unproject(
+    (vec3) { mx, -my, 0.f },
+    app->_draw._globalUBData.projectionView, 
+    viewport, 
+    cursorPos
+  );
+
+  result[0] = cursorPos[0];
+  result[1] = cursorPos[1];
 }
 
 void  _App_updateCamera(App_t *app) {
   if (app->_camMoving) {
     vec2 cPos = {0};
-    _App_getWorldMousePos(app, cPos);
+    _App_getMouseWorldPosition(app, cPos);
 
     vec2 delta = {0};
     glm_vec2_sub(cPos, app->_mouseStart, delta);
@@ -376,6 +529,17 @@ void  _App_updateCamera(App_t *app) {
     app->_deltaTime,
     app->camera
   );
+
+  glm_mat4_identity(app->_draw._view);
+  glm_translate
+    (app->_draw._view,
+    (vec3) { 
+      app->camera[0], 
+      app->camera[1], 
+      0.0 
+    }
+  );
+
 }
 
 void _App_wndMouseBtnCBCK(GLFWwindow* window, int button, int action, int mods) {
@@ -385,7 +549,7 @@ void _App_wndMouseBtnCBCK(GLFWwindow* window, int button, int action, int mods) 
 
   App_t *app = glfwGetWindowUserPointer(window);
   if (action == GLFW_PRESS) {
-    _App_getWorldMousePos(app, app->_mouseStart);
+    _App_getMouseWorldPosition(app, app->_mouseStart);
 
     memcpy(app->_camStart, app->camera, sizeof(vec2));
     memcpy(app->_camNew, app->camera, sizeof(vec2));
@@ -725,7 +889,7 @@ Result_t __Draw_loadShaderStringFromFiles(GLuint *p_program, const char *vert, c
   return RESULT_SUCCESS;
 }
 
-Result_t _App_setupOpenGl(App_t *app) {
+Result_t _App_initOpenGL(App_t *app) {
 #ifdef APP_DEBUG
   glEnable(GL_DEBUG_OUTPUT);
   glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
@@ -1175,6 +1339,17 @@ void _Draw_UI(App_t* app, UI_t *ui) {
 
 void _App_render(App_t *app) {
   glfwMakeContextCurrent(app->_wnd);
+
+  glm_mat4_mul(
+    app->_draw._projection,
+    app->_draw._view,
+    app->_draw._globalUBData.projectionView
+  );
+
+  glNamedBufferSubData(app->_draw._globalUB, 0, 
+    sizeof(_GlobalUBData_t), &app->_draw._globalUBData
+  );
+
   glClear(GL_COLOR_BUFFER_BIT);
 
   _LocalUBData2D_t spriteUB = {
@@ -1184,7 +1359,9 @@ void _App_render(App_t *app) {
   glm_translate(spriteUB.model, 
     (vec3) { app->_spritePosition[0], app->_spritePosition[1], 0 }
   );
-
+  glm_scale(spriteUB.model, 
+    (vec3) { 0.1f, 0.1f, 0 }
+  );
   glNamedBufferSubData(app->_draw._localUB, 0, 
     sizeof(_LocalUBData2D_t), &spriteUB
   );
@@ -1194,6 +1371,46 @@ void _App_render(App_t *app) {
   glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->_draw._localUB);
   glBindVertexArray(app->_draw._quadVAO);
   glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+  spriteUB = (_LocalUBData2D_t) {
+    .color = {0.75, 0.0, 0.5, 1.0},
+    .model = GLM_MAT4_IDENTITY_INIT
+  };
+
+  // Drawing cursor
+  vec3 cursorPos = {0};
+  _App_getMouseWorldPosition(app, cursorPos);
+
+  // INVESTIGATE
+  cursorPos[1] += 1;
+
+  glm_translate(spriteUB.model, cursorPos);
+  glm_scale(spriteUB.model, (vec3) {0.1, 0.1, 0.1});
+
+  glNamedBufferSubData(app->_draw._localUB, 0, 
+    sizeof(_LocalUBData2D_t), &spriteUB
+  );
+  glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->_draw._globalUB); 
+  glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->_draw._localUB);
+  glBindVertexArray(app->_draw._quadVAO);
+  glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+  char cursorPosBuffer[64];
+  sprintf_s(cursorPosBuffer, sizeof(cursorPosBuffer) / sizeof(char), 
+    "Cursor Pos: (%.1f, %.1f)", cursorPos[0], cursorPos[1]);
+  
+  _Draw_text(app, cursorPosBuffer, (Transform_t) {
+      .position = {-0.5, -0.5},
+      .rotation = 0.f,
+      .scale = { 1.f, 1.f }
+    },
+    (TextInfo_t) {
+      .fontSize = 100,
+      .horSpacing = 10.f,
+      .vertSpacing = 1.f
+    }
+  );
+  // Drawing cursor
 
   _Draw_text(app, "This shit is Epic\n we goon to femboys twin", 
     (Transform_t) {
@@ -1246,9 +1463,8 @@ Result_t _App_initUI(App_t *app) {
   UiInfo_t info = {
     .color = COLOR_RED,
     .parent = NULL,
-    .position = {0, 0},
-    .size = {1.0, 0.25},
-    .rotation = 0.f,
+    .position = {0.0, -1.75},
+    .size = {2.0, 0.25f},
     .type = UI_EL_TYPE_CONTAINER
   };
 
@@ -1257,9 +1473,24 @@ Result_t _App_initUI(App_t *app) {
 
   UI_init(&app->_uiRoot, &info, (vec2) {fbW, fbH});
 
-  info.color[1] = 1.f;
-  info.color[2] = 1.f;
-  UI_addChild(&app->_uiRoot, &info, (vec2) {fbW, fbH});
+  UiContainerInfo_t containerInfo = {
+    .color = COLOR_WHITE,
+    .size = {1.f, 0.5},
+    .position = {0},
+    .flags = CONTAINER_FLAG_ORDER_VERTICAL
+  };
+
+  __UI_initContainer(&app->_uiRoot, &containerInfo);
+  UI_addChildContainer(&app->_uiRoot, &containerInfo, (vec2) {fbW, fbH});
+
+  UiButtonInfo_t buttonInfo = {
+    .color = {0.7, 0.2f, 0.5, 1.0},
+    .onHoverColor = {0.f, 1.f, 0.f, 1.f},
+    .onClick = NULL,
+    .position = {0, 1.0},
+    .size = {1.f, 0.5f}
+  };
+  UI_addChildButton(&app->_uiRoot, &buttonInfo, (vec2) {fbW, fbH});
 
   return RESULT_SUCCESS;
 }
@@ -1299,66 +1530,44 @@ void _App_update(App_t *app)
     glm_vec2_add(app->_spritePosition, offset, app->_spritePosition);
   }
 
-  mat4 view = GLM_MAT4_IDENTITY_INIT;
-  glm_translate(view, (vec3) { app->camera[0], app->camera[1], 0.0 });
-
-  glm_mat4_mul(app->_draw._projection, view, app->_draw._globalUBData.projectionView);
-
-  // GL CODE -> marked to find if this gets moved into its own function
-  // as the number of buffers that are written to grows
-  // maybe a function called "Update GL Buffers"
-  glNamedBufferSubData(app->_draw._globalUB, 0, 
-    sizeof(_GlobalUBData_t), &app->_draw._globalUBData
-  );
-
+  // TEMP//REMOVE
+  vec2 cPos = {0};
+  _App_getMouseWorldPosition(app, cPos);
+  UI_processMouseMove(&app->_uiRoot, cPos);
 }
 
 void App_destroy(App_t *app) {
-  if (app == NULL) {
-    log_warn("App is set to NULL");
-    return;
-  }
+  DEBUG_ASSERT(app != NULL, "App is set to null on App_destroy");
 
   _App_cleanupUI(app);
   _App_cleanupTextRenderer(app);
   _App_OpenGlCleanup(app);
   
-  if (app->_wnd != NULL)
-    glfwDestroyWindow(app->_wnd);
+  DEBUG_ASSERT(app->_wnd != NULL, "GLFWwindow app->_wnd is set to NULL, not initialized");
+  glfwDestroyWindow(app->_wnd);
   
   free(app);
 }
 
-#define FPS_LIMIT 144
-#define FRAME_TIME (1.0 / FPS_LIMIT)
-
 void App_run(App_t *app) {
-  app->_lastTime = glfwGetTime();
-  _App_getWorldMousePos(app, app->_mouseStart);
+  _App_getMouseWorldPosition(app, app->_mouseStart);
 
-  // TODO: compartmentalize the time code, so it can run in the resize callback
   while (app->_running) {
-    double newTime = glfwGetTime();
-    double delta = newTime - app->_lastTime;
-    if (delta < FRAME_TIME) {
+    if (!__App_frameTimeElapsed(app)) {
       continue;
     }
 
-    app->_deltaTime = delta;
     glfwPollEvents();
-
-
     _App_render(app);
     _App_update(app);
-
-    app->_lastTime = newTime;
   }
 }
 
-void _App_wndFbResizeCBCK(GLFWwindow *window, int width, int height) {
-  App_t *app = glfwGetWindowUserPointer(window);
+inline void __App_calculateProjection(App_t *app) {
+  int fbfW = 0, fbfH = 0;
+  glfwGetFramebufferSize(app->_wnd, &fbfW, &fbfH);
 
-  float aspect = width / (float)height;
+  float aspect = fbfW / (float)fbfH;
 
   float left = -1.f;
   float right = 1.f;
@@ -1368,23 +1577,23 @@ void _App_wndFbResizeCBCK(GLFWwindow *window, int width, int height) {
   glm_ortho(
     left, right,
     bottom, top, 
-    -1.f, 1.f, 
+    -1.f, 1.f,
     app->_draw._projection
   );
+}
+
+void _App_wndFbResizeCBCK(GLFWwindow *window, int width, int height) {
+  App_t *app = glfwGetWindowUserPointer(window);
 
   glViewport(0, 0, width, height);
+  __App_calculateProjection(app);
   __UI_updateMatrix(&app->_uiRoot, (vec2) {width, height});
 
-  _App_render(app);
-  double newTime = glfwGetTime();
-  double delta = newTime - app->_lastTime;
-  if (delta < FRAME_TIME) {
+  if (!__App_frameTimeElapsed(app))
     return;
-  }
-  app->_deltaTime = delta;
 
   _App_update(app);
-  app->_lastTime = newTime;
+  _App_render(app);
 }
 
 Result_t App_create(App_t** p_app, AppInfo_t info) {
@@ -1418,8 +1627,13 @@ Result_t App_create(App_t** p_app, AppInfo_t info) {
       ._texShader = 0,
       ._flatShader = 0,
 
+      ._view = GLM_MAT4_IDENTITY_INIT,
+      ._projection = GLM_MAT4_IDENTITY_INIT,
+
       ._globalUB = 0, ._localUB = 0,
-      ._globalUBData = {0},
+      ._globalUBData = (_GlobalUBData_t) {
+        .projectionView = GLM_MAT4_IDENTITY_INIT 
+      }
     },
 
     ._spritePosition = {0, 0},
@@ -1429,29 +1643,14 @@ Result_t App_create(App_t** p_app, AppInfo_t info) {
     .input = malloc(DEFAULT_BUF_CAP),
     ._inCap = DEFAULT_BUF_CAP,
     ._inCount = 0,
+
+    ._lastTime = 0.0,
+    ._deltaTime = 0.0,
   };
 
   (*p_app)->input[0] = '\0';
 
-  int fbfW = 0, fbfH = 0;
-  glfwGetFramebufferSize((*p_app)->_wnd, &fbfW, &fbfH);
-
-  float aspect = fbfW / (float)fbfH;
-
-  mat4 projection = GLM_MAT4_IDENTITY_INIT;
-
-  float left = -1.f;
-  float right = 1.f;
-  float bottom = -1.f / aspect;
-  float top = 1.f / aspect;
-
-  glm_ortho(
-    left, right,
-    bottom, top, 
-    -1.f, 1.f,
-    (*p_app)->_draw._projection
-  );
-  glm_mat4_identity((*p_app)->_draw._globalUBData.projectionView);
+  __App_calculateProjection(*p_app);
 
   glfwSetWindowUserPointer(window, *p_app);
   glfwSetWindowCloseCallback(window, _App_wndCloseCBCK);
@@ -1471,7 +1670,7 @@ Result_t App_create(App_t** p_app, AppInfo_t info) {
     return RESULT_FAIL;
   }
 
-  if (_App_setupOpenGl(*p_app) != RESULT_SUCCESS) {
+  if (_App_initOpenGL(*p_app) != RESULT_SUCCESS) {
     log_error("Failed to setup OpenGL resources" ENDL);
     return RESULT_FAIL;
   }

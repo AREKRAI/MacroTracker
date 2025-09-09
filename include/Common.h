@@ -50,10 +50,8 @@ typedef enum _Result {
 #define DEBUG_ASSERT(...)
 #endif
 
-#define COLOR_WHITE {1.f, 1.f, 1.f, 1.f}
-#define COLOR_RED {1.f, 0.f, 0.f, 1.f}
-
-// UNICODE CHARACTER
-typedef unsigned int UC_t;
+#define COLOR_WHITE       { 1.f, 1.f, 1.f, 1.f }
+#define COLOR_RED         { 1.f, 0.f, 0.f, 1.f }
+#define COLOR_TRANSPARENT { 0.f, 0.f, 0.f, 0.f }
 
 #endif

@@ -28,7 +28,7 @@ typedef enum _Result {
 #endif
 
 #define CLEAR_CONSOLE(...) system(CLEAR_CONSOLE_COMMAND)
-#define ENDL "\n"
+#define ENDL ""
 
 #define EXPR_STR(expr) #expr
 

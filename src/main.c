@@ -26,14 +26,14 @@
 // UNUSED
 typedef struct __StrView_t {
   size_t count;
-  char *str;
+  UC_t *str;
 } StrView_t;
 
 // UNUSED
 typedef struct __Str_t {
   size_t count;
   size_t cap;
-  char *str;
+  UC_t *str;
 } Str_t;
 
 #define STR_TO_VIEW(str) ((StrView_t) { .count = str.count, .str = str.str })
@@ -46,6 +46,7 @@ size_t __Str_getCharSize(const char *src) {
   return -1;
 }
 
+// Literal assumed to be utf8
 Str_t *Str_createFromLiteral(const char *src) {
   Str_t *self = malloc(sizeof(Str_t));
   *self = (Str_t) {
@@ -92,7 +93,9 @@ void Transform_toMat4(Transform_t *self, mat4 matrix) {
   );
 
   glm_translate(matrix, self->position);
+
   glm_scale(matrix, self->scale);
+
 }
 
 void Transform_copy(Transform_t *self, Transform_t other) {
@@ -138,7 +141,7 @@ typedef struct __AppInfo_t {
 
 #define DEFAULT_APP_NAME "macro"
 #define DEFAULT_WINDOW_WIDTH 1024
-#define DEFAULT_WINDOW_HEIGHT 512
+#define DEFAULT_WINDOW_HEIGHT 1024
 
 #define APP_INFO_INIT (AppInfo_t) {                          \
     .name = DEFAULT_APP_NAME,                                \
@@ -154,6 +157,25 @@ typedef enum __UiElType_t {
 
 #define DEFAULT_CHILD_CAP ((size_t)1 << 7)
 
+// TODO: implement atlas
+
+typedef enum __UI_SIZE_FLAG_T {
+  UI_SIZE_FLAG_REAL = 0,
+  UI_SIZE_FLAG_FILL_WIDTH = 1, // NOT SUPPORTED
+  UI_SIZE_FLAG_FILL_HEIGHT = 2 // NOT SUPPORTED
+} UI_SIZE_FLAG_T;
+
+typedef struct __UiSize_t {
+  UI_SIZE_FLAG_T flag;
+
+  union {
+    vec2 dimentions;
+    struct {
+      float width, height;
+    };
+  };
+} UiSize_t;
+
 typedef struct __UI_t {
   struct __UI_t *children, *parent;
   size_t childCount, childCap;
@@ -161,7 +183,7 @@ typedef struct __UI_t {
   UiElType_t _type;
   void *_unique;
 
-  vec2 _size, _globalSize;
+  vec2 _size;
   vec2 _pos, _globalPos;
 
   vec4 color;
@@ -178,44 +200,45 @@ typedef struct __UiInfo_t {
   UI_t *parent;
 } UiInfo_t;
 
-void __UI_calculateMatrix(UI_t *self, vec2 viewportSize) {
-  float aspect = viewportSize[0] / viewportSize[1];
+void __UI_calculateMatrix(UI_t *self) {
   glm_mat4_identity(self->_matrix);
-
-  vec3 trueSize = {0, 0, 0};
-  memcpy(trueSize, self->_globalSize, sizeof(trueSize));
-  glm_scale(self->_matrix, trueSize);
   
-  vec3 truePos = {0, 0, 0};
-  memcpy(truePos, self->_globalPos, sizeof(truePos));
+  glm_translate(self->_matrix, (vec3){
+      self->_globalPos[0],
+      self->_globalPos[1],
+      0.f
+    }
+  );
 
-  glm_translate(self->_matrix, truePos);
-
+  glm_scale(self->_matrix, (vec3) { 
+      self->_size[0], 
+      self->_size[1], 
+      1.0f
+    }
+  );
 }
 
-void __UI_updateMatrix(UI_t *self, vec2 viewportSize) {
+void __UI_updateMatrix(UI_t *self) {
   // Update globals to locals
   memcpy(self->_globalPos, self->_pos, sizeof(self->_globalPos));
-  memcpy(self->_globalSize, self->_size, sizeof(self->_globalSize));
 
   if (self->parent != NULL) {
-    glm_vec2_mul(self->_globalSize, self->parent->_globalSize, self->_globalSize);
     glm_vec2_add(self->parent->_globalPos, self->_globalPos, self->_globalPos);
   }
 
-  __UI_calculateMatrix(self, viewportSize);
+  __UI_calculateMatrix(self);
   for (UI_t *child = self->children;
     child < &self->children[self->childCount]; child++) {
-      __UI_updateMatrix(child, viewportSize);
+      __UI_updateMatrix(child);
   }
 }
 
-void UI_setPosition(UI_t *self, vec2 newPosition, vec2 viewportSize) {
+void UI_setPosition(UI_t *self, vec2 newPosition) {
   memcpy(self->_pos, newPosition, sizeof(vec2));
-  __UI_updateMatrix(self, viewportSize);
+  __UI_updateMatrix(self);
 }
 
-void UI_setSize(UI_t *self, vec2 newSize, vec2 viewportSize) {
+void UI_setSize(UI_t *self, vec2 newSize) {
   DEBUG_ASSERT(
     newSize[0] < 1.01f && newSize[1] < 1.01f &&
     newSize[0] > 0.f && newSize[1] > 0.f,
@@ -223,10 +246,10 @@ void UI_setSize(UI_t *self, vec2 newSize, vec2 viewportSize) {
   );
 
   memcpy(self->_size, newSize, sizeof(vec2));
-  __UI_updateMatrix(self, viewportSize);
+  __UI_updateMatrix(self);
 }
 
-Result_t UI_init(UI_t *self, UiInfo_t *info, vec2 viewportSize) {
+Result_t UI_init(UI_t *self, UiInfo_t *info) {
   self->childCap = DEFAULT_CHILD_CAP;
   self->children = malloc(self->childCap);
   self->childCount = 0;
@@ -239,11 +262,11 @@ Result_t UI_init(UI_t *self, UiInfo_t *info, vec2 viewportSize) {
   memcpy(self->color, info->color, sizeof(vec4));
   memcpy(self->_color, info->color, sizeof(vec4));
 
-  __UI_updateMatrix(self, viewportSize);
+  __UI_updateMatrix(self);
   return EXIT_SUCCESS;
 }
 
-UI_t *UI_addChild(UI_t *self, UiInfo_t *info, vec2 viewportSize) {
+UI_t *UI_addChild(UI_t *self, UiInfo_t *info) {
   self->childCount++;
   while (self->childCount * sizeof(UI_t) > self->childCap) {
     self->childCap <<= 1;
@@ -252,7 +275,7 @@ UI_t *UI_addChild(UI_t *self, UiInfo_t *info, vec2 viewportSize) {
 
   UI_t *child = &self->children[self->childCount - 1];
   info->parent = self;
-  UI_init(child, info, viewportSize);
+  UI_init(child, info);
 
   return child;
 }
@@ -301,7 +324,7 @@ void __UI_initContainer(UI_t *self, UiContainerInfo_t *specInfo) {
   };
 }
 
-UI_t *UI_addChildContainer(UI_t *self, UiContainerInfo_t *specInfo, vec2 viewportSize) {
+UI_t *UI_addChildContainer(UI_t *self, UiContainerInfo_t *specInfo) {
   UiInfo_t genInfo = {
     .type = UI_EL_TYPE_CONTAINER,
     .parent = NULL,
@@ -325,7 +348,7 @@ UI_t *UI_addChildContainer(UI_t *self, UiContainerInfo_t *specInfo, vec2 viewpor
   );
   memcpy(genInfo.size, specInfo->size, sizeof(genInfo.size));
 
-  UI_t *child = UI_addChild(self, &genInfo, viewportSize);
+  UI_t *child = UI_addChild(self, &genInfo);
   __UI_initContainer(child, specInfo);
 
   return child;
@@ -398,7 +421,7 @@ void __UI_initButton(UI_t *self, UiButtonInfo_t *specInfo) {
   memcpy(unique->onHoverColor, specInfo->onHoverColor, sizeof(unique->onHoverColor));
 }
 
-UI_t *UI_addChildButton(UI_t *self, UiButtonInfo_t *specInfo, vec2 viewportSize) {
+UI_t *UI_addChildButton(UI_t *self, UiButtonInfo_t *specInfo) {
   UiInfo_t genInfo = {
     .type = UI_EL_TYPE_BUTTON,
     .parent = NULL,
@@ -422,33 +445,49 @@ UI_t *UI_addChildButton(UI_t *self, UiButtonInfo_t *specInfo, vec2 viewportSize)
   );
   memcpy(genInfo.size, specInfo->size, sizeof(genInfo.size));
 
-  UI_t *child = UI_addChild(self, &genInfo, viewportSize);
+  UI_t *child = UI_addChild(self, &genInfo);
   __UI_initButton(child, specInfo);
 
   return child;
 }
 
-void UI_processMouseMove(UI_t* self, vec2 mouseWorldPos) {
-  for (UI_t *child = self->children;
-    child < &self->children[self->childCount]; child++) {
-      UI_processMouseMove(child, mouseWorldPos);
-  }
-
-  UiButton_t *unique = self->_unique;
-
+_Bool UI_isHovered(UI_t* self, vec2 mouseWorldPos) {
   vec2 bottomLeft = {0};
   vec2 topRight = {0};
-  glm_vec2_copy(bottomLeft, self->_globalPos);
-  glm_vec2_copy(topRight, self->_globalPos);
-  glm_vec2_add(topRight, self->_globalSize, topRight);
+  glm_vec2_copy(self->_globalPos, bottomLeft);
+  glm_vec2_copy(self->_globalPos, topRight);
+
+  vec2 halfSize = {
+    self->_size[0] / 2.f,
+    self->_size[1] / 2.f
+  };
+
+  topRight[0] += halfSize[0];
+  bottomLeft[0] -= halfSize[0];
+
+  bottomLeft[1] -= halfSize[1];
+  topRight[1] += halfSize[1];
 
   _Bool hovered = mouseWorldPos[0] < topRight[0] &&
     mouseWorldPos[0] > bottomLeft[0];
   hovered = hovered && 
     (mouseWorldPos[1] < topRight[1] && mouseWorldPos[1] > bottomLeft[1]);
 
+  return hovered;
+}
+
+void UI_processMouseInput(UI_t* self, vec2 mouseWorldPos) {
+  for (UI_t *child = self->children;
+    child < &self->children[self->childCount]; child++) {
+      UI_processMouseInput(child, mouseWorldPos);
+  }
+
+  _Bool hovered = UI_isHovered(self, mouseWorldPos);
+
   switch (self->_type) {
     case UI_EL_TYPE_BUTTON: {
+      UiButton_t *unique = self->_unique;
+
       if (hovered) {
         memcpy(self->_color, unique->onHoverColor, sizeof(self->_color));
       } else {
@@ -486,27 +525,88 @@ void _App_wndCloseCBCK(GLFWwindow* window) {
   app->_running = false;
 }
 
-#define CAMERA_MOVE_STRENGTH 0.5f
+#define CAMERA_MOVE_STRENGTH 50.f
 
-void _App_getMouseWorldPosition(App_t *app, vec2 result) {
+inline void _App_getMouseScreenPosition(App_t *app, vec2 result) {
   double my, mx;
   glfwGetCursorPos(app->_wnd, &mx, &my);
 
   int fbW = 0, fbH = 0;
   glfwGetFramebufferSize(app->_wnd, &fbW, &fbH);
 
-  vec3 cursorPos = {0};
-  vec4 viewport = {0.0f, 0.0f, (float)fbW, (float)fbH};
+  result[0] = (2.f * mx - fbW) / fbW ;
+  result[1] = -(2.f * my) / fbH;
+}
 
-  glm_unproject(
-    (vec3) { mx, -my, 0.f },
-    app->_draw._globalUBData.projectionView, 
-    viewport, 
+inline void _App_getMouseScreenNormalizedPosition(App_t *app, vec2 result) {
+  int fbW = 0, fbH = 0;
+  glfwGetFramebufferSize(app->_wnd, &fbW, &fbH);
+  float aspect = fbW / (float)fbH;
+
+  // Normalize for aspect
+  _App_getMouseScreenPosition(app, result);
+  result[0] *= aspect;
+}
+
+inline void _App_getMouseScreenNormalizedCentered(App_t *app, vec2 result) {
+  int fbW = 0, fbH = 0;
+  glfwGetFramebufferSize(app->_wnd, &fbW, &fbH);
+  float aspect = fbW / (float)fbH;
+
+  // Normalize for aspect
+  _App_getMouseScreenPosition(app, result);
+  result[0] *= aspect;
+  result[1] += 1.0f;
+}
+
+inline void _App_getMouseWorldPosition(App_t *app, vec2 result) {
+  int fbW = 0, fbH = 0;
+  glfwGetFramebufferSize(app->_wnd, &fbW, &fbH);
+  float aspect = fbW / (float)fbH;
+
+  vec2 screenPosition = {0};
+  // Normalize for aspect
+  _App_getMouseScreenPosition(app, screenPosition);
+  screenPosition[0] *= aspect;
+
+  mat4 camInv = GLM_MAT4_IDENTITY_INIT;
+  glm_mat4_inv(app->_draw._view, camInv);
+
+  vec3 cursorPos = {0, 0, 0};
+  glm_mat4_mulv3(
+    camInv,
+    (vec3) {screenPosition[0], screenPosition[1], 0.f}, 1.f,
     cursorPos
   );
 
   result[0] = cursorPos[0];
   result[1] = cursorPos[1];
+}
+
+void _App_UI_onClick(App_t *app, UI_t* self, vec2 mouseWorldPos) {
+  for (UI_t *child = self->children;
+    child < &self->children[self->childCount]; child++) {
+      _App_UI_onClick(app, child, mouseWorldPos);
+  }
+
+  _Bool hovered = UI_isHovered(self, mouseWorldPos);
+
+  if (!hovered)
+    return;
+
+  switch (self->_type) {
+    case UI_EL_TYPE_BUTTON: {
+      UiButton_t *unique = self->_unique;
+
+      if (unique->onClick == NULL)
+        break;
+
+      unique->onClick(app, self);
+      break;
+    }
+    default:
+      break;
+  }
 }
 
 void  _App_updateCamera(App_t *app) {
@@ -517,9 +617,7 @@ void  _App_updateCamera(App_t *app) {
     vec2 delta = {0};
     glm_vec2_sub(cPos, app->_mouseStart, delta);
     
-    delta[0] *= -1.f; // IDK I'M DUMB
-    glm_vec2_scale(delta, CAMERA_MOVE_STRENGTH * app->_deltaTime, delta);
-
+    glm_vec2_scale(delta, -CAMERA_MOVE_STRENGTH * app->_deltaTime, delta);
     glm_vec2_sub(app->_camStart, delta, app->_camNew);
   }
 
@@ -529,17 +627,6 @@ void  _App_updateCamera(App_t *app) {
     app->_deltaTime,
     app->camera
   );
-
-  glm_mat4_identity(app->_draw._view);
-  glm_translate
-    (app->_draw._view,
-    (vec3) { 
-      app->camera[0], 
-      app->camera[1], 
-      0.0 
-    }
-  );
-
 }
 
 void _App_wndMouseBtnCBCK(GLFWwindow* window, int button, int action, int mods) {
@@ -557,6 +644,16 @@ void _App_wndMouseBtnCBCK(GLFWwindow* window, int button, int action, int mods) 
   } else {
     app->_camMoving = false;
   }
+
+  if (button != GLFW_MOUSE_BUTTON_1)
+    return;
+
+  if (action != GLFW_RELEASE)
+    return;
+
+  vec2 cPos = {0};
+  _App_getMouseScreenNormalizedCentered(app, cPos);
+  _App_UI_onClick(app, &app->_uiRoot, cPos);
 }
 
 void _App_wndInputCBCK(GLFWwindow* window,
@@ -1337,8 +1434,16 @@ void _Draw_UI(App_t* app, UI_t *ui) {
   }
 }
 
-void _App_render(App_t *app) {
-  glfwMakeContextCurrent(app->_wnd);
+void _Draw_loadCamera(App_t *app, vec2 cameraPosition) {
+  glm_mat4_identity(app->_draw._view);
+  glm_translate(
+    app->_draw._view,
+    (vec3) { 
+      cameraPosition[0], 
+      cameraPosition[1], 
+      0.0 
+    }
+  );
 
   glm_mat4_mul(
     app->_draw._projection,
@@ -1349,7 +1454,12 @@ void _App_render(App_t *app) {
   glNamedBufferSubData(app->_draw._globalUB, 0, 
     sizeof(_GlobalUBData_t), &app->_draw._globalUBData
   );
+}
 
+void _App_render(App_t *app) {
+  glfwMakeContextCurrent(app->_wnd);
+  
+  _Draw_loadCamera(app, app->camera);
   glClear(GL_COLOR_BUFFER_BIT);
 
   _LocalUBData2D_t spriteUB = {
@@ -1378,14 +1488,14 @@ void _App_render(App_t *app) {
   };
 
   // Drawing cursor
-  vec3 cursorPos = {0};
-  _App_getMouseWorldPosition(app, cursorPos);
+  vec3 cPos = {0};
+  _App_getMouseWorldPosition(app, cPos);
 
   // INVESTIGATE
-  cursorPos[1] += 1;
+  cPos[1] += 1;
 
-  glm_translate(spriteUB.model, cursorPos);
-  glm_scale(spriteUB.model, (vec3) {0.1, 0.1, 0.1});
+  glm_translate(spriteUB.model, cPos);
+  glm_scale(spriteUB.model, (vec3) {0.025, 0.025, 1.f});
 
   glNamedBufferSubData(app->_draw._localUB, 0, 
     sizeof(_LocalUBData2D_t), &spriteUB
@@ -1395,11 +1505,12 @@ void _App_render(App_t *app) {
   glBindVertexArray(app->_draw._quadVAO);
   glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
-  char cursorPosBuffer[64];
-  sprintf_s(cursorPosBuffer, sizeof(cursorPosBuffer) / sizeof(char), 
-    "Cursor Pos: (%.1f, %.1f)", cursorPos[0], cursorPos[1]);
   
-  _Draw_text(app, cursorPosBuffer, (Transform_t) {
+  char cPosBuffer[64];
+  sprintf_s(cPosBuffer, sizeof(cPosBuffer) / sizeof(char), 
+    "Cursor Pos: (%.1f, %.1f)", cPos[0], cPos[1]);
+  
+  _Draw_text(app, cPosBuffer, (Transform_t) {
       .position = {-0.5, -0.5},
       .rotation = 0.f,
       .scale = { 1.f, 1.f }
@@ -1459,19 +1570,24 @@ void _App_render(App_t *app) {
   glfwSwapBuffers(app->_wnd);
 }
 
+void __testButtonCallback(App_t  *app, UI_t *self) {
+  log_info("Button clicked" ENDL);
+  vec2 newPosition = {0};
+  glm_vec2_copy(self->_pos, newPosition);
+  newPosition[1] += 0.01;
+  UI_setPosition(self, newPosition);
+}
+
 Result_t _App_initUI(App_t *app) {
   UiInfo_t info = {
     .color = COLOR_RED,
     .parent = NULL,
-    .position = {0.0, -1.75},
+    .position = {0.f, 0.f},
     .size = {2.0, 0.25f},
     .type = UI_EL_TYPE_CONTAINER
   };
 
-  int fbW = 0, fbH = 0;
-  glfwGetFramebufferSize(app->_wnd, &fbW, &fbH);
-
-  UI_init(&app->_uiRoot, &info, (vec2) {fbW, fbH});
+  UI_init(&app->_uiRoot, &info);
 
   UiContainerInfo_t containerInfo = {
     .color = COLOR_WHITE,
@@ -1481,16 +1597,20 @@ Result_t _App_initUI(App_t *app) {
   };
 
   __UI_initContainer(&app->_uiRoot, &containerInfo);
-  UI_addChildContainer(&app->_uiRoot, &containerInfo, (vec2) {fbW, fbH});
+  UI_addChildContainer(&app->_uiRoot, &containerInfo);
 
   UiButtonInfo_t buttonInfo = {
     .color = {0.7, 0.2f, 0.5, 1.0},
     .onHoverColor = {0.f, 1.f, 0.f, 1.f},
-    .onClick = NULL,
-    .position = {0, 1.0},
+    .onClick = __testButtonCallback,
+    .position = {0, 0},
     .size = {1.f, 0.5f}
   };
-  UI_addChildButton(&app->_uiRoot, &buttonInfo, (vec2) {fbW, fbH});
+  UI_addChildButton(&app->_uiRoot, &buttonInfo);
+  buttonInfo.size[0] = 0.5f;
+  buttonInfo.size[1] = 0.25f;
+  buttonInfo.position[0] += 0.5;
+  UI_addChildButton(&app->_uiRoot, &buttonInfo);
 
   return RESULT_SUCCESS;
 }
@@ -1526,14 +1646,20 @@ void _App_update(App_t *app)
       (float)app->_deltaTime * offsetMagNorm;
 
     glm_vec2_scale(offset, transformMultiplier * BASE_SPEED, offset);
-    
     glm_vec2_add(app->_spritePosition, offset, app->_spritePosition);
   }
 
+  // vec2 newUiPos = {0, 0.1 * app->_deltaTime};
+  // glm_vec2_add(app->_uiRoot.children[1]._pos, newUiPos, newUiPos);
+  // UI_setPosition(
+  //   &app->_uiRoot.children[1],
+  //   newUiPos
+  // );
+
   // TEMP//REMOVE
   vec2 cPos = {0};
-  _App_getMouseWorldPosition(app, cPos);
-  UI_processMouseMove(&app->_uiRoot, cPos);
+  _App_getMouseScreenNormalizedCentered(app, cPos);
+  UI_processMouseInput(&app->_uiRoot, cPos);
 }
 
 void App_destroy(App_t *app) {
@@ -1567,16 +1693,10 @@ inline void __App_calculateProjection(App_t *app) {
   int fbfW = 0, fbfH = 0;
   glfwGetFramebufferSize(app->_wnd, &fbfW, &fbfH);
 
-  float aspect = fbfW / (float)fbfH;
-
-  float left = -1.f;
-  float right = 1.f;
-  float bottom = -1.f / aspect;
-  float top = 1.f / aspect;
-
+  float aspect =  fbfW / (float)fbfH;
   glm_ortho(
-    left, right,
-    bottom, top, 
+    -aspect, aspect,
+    -1.f, 1.f,
     -1.f, 1.f,
     app->_draw._projection
   );
@@ -1587,7 +1707,7 @@ void _App_wndFbResizeCBCK(GLFWwindow *window, int width, int height) {
 
   glViewport(0, 0, width, height);
   __App_calculateProjection(app);
-  __UI_updateMatrix(&app->_uiRoot, (vec2) {width, height});
+  __UI_updateMatrix(&app->_uiRoot);
 
   if (!__App_frameTimeElapsed(app))
     return;

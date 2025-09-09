@@ -6,6 +6,7 @@ set(SRCS
   ${SRC_DIR}/main.c
   ${SRC_DIR}/MacroDatabase.c
   ${SRC_DIR}/UStr.c
+  ${SRC_DIR}/UI.c
 )
 
 set(FREETYPE "${CMAKE_SOURCE_DIR}/deps/freetype-2.13.3")

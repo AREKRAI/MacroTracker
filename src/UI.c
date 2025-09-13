@@ -81,7 +81,7 @@ Result_t UI_init(UI_t *self, UiInfo_t *info) {
   return EXIT_SUCCESS;
 }
 
-size_t UI_addChild(UI_t *self, UiInfo_t *info) {
+UI_t *UI_addChild(UI_t *self, UiInfo_t *info) {
   self->childCount++;
 
   while (self->childCount * sizeof(UI_t) > self->childCap) {
@@ -93,7 +93,7 @@ size_t UI_addChild(UI_t *self, UiInfo_t *info) {
   info->parent = self;
   UI_init(child, info);
 
-  return self->childCount - 1;
+  return child;
 }
 
 void UI_destroy(UI_t *self) {
@@ -124,7 +124,7 @@ void __UI_initContainer(UI_t *self, UiContainerInfo_t *specInfo) {
   };
 }
 
-size_t UI_addChildContainer(UI_t *self, UiContainerInfo_t *specInfo) {
+UI_t *UI_addChildContainer(UI_t *self, UiContainerInfo_t *specInfo) {
   UiInfo_t genInfo = {
     .type = UI_EL_TYPE_CONTAINER,
     .parent = self,
@@ -148,8 +148,8 @@ size_t UI_addChildContainer(UI_t *self, UiContainerInfo_t *specInfo) {
   );
   UiSize_copy(&genInfo.size, &specInfo->size);
 
-  size_t child = UI_addChild(self, &genInfo);
-  __UI_initContainer(&self->children[child], specInfo);
+  UI_t *child = UI_addChild(self, &genInfo);
+  __UI_initContainer(child, specInfo);
 
   return child;
 }
@@ -167,7 +167,7 @@ void __UI_initButton(UI_t *self, UiButtonInfo_t *specInfo) {
   memcpy(unique->onHoverColor, specInfo->onHoverColor, sizeof(unique->onHoverColor));
 }
 
-size_t UI_addChildButton(UI_t *self, UiButtonInfo_t *specInfo) {
+UI_t *UI_addChildButton(UI_t *self, UiButtonInfo_t *specInfo) {
   UiInfo_t genInfo = {
     .type = UI_EL_TYPE_BUTTON,
     .hide = false,
@@ -192,8 +192,8 @@ size_t UI_addChildButton(UI_t *self, UiButtonInfo_t *specInfo) {
   );
   UiSize_copy(&genInfo.size, &specInfo->size);
 
-  size_t child = UI_addChild(self, &genInfo);
-  __UI_initButton(&self->children[child], specInfo);
+  UI_t *child = UI_addChild(self, &genInfo);
+  __UI_initButton(child, specInfo);
 
   return child;
 }
@@ -251,7 +251,7 @@ void __UI_initText(UI_t *self, UiTextInfo_t *specInfo) {
   UStr_init(&unique->str, specInfo->str);
 }
 
-size_t UI_addChildText(UI_t *self, UiTextInfo_t *specInfo) {
+UI_t *UI_addChildText(UI_t *self, UiTextInfo_t *specInfo) {
   UiInfo_t genInfo = {
     .type = UI_EL_TYPE_TEXT,
     .hide = false,
@@ -276,8 +276,8 @@ size_t UI_addChildText(UI_t *self, UiTextInfo_t *specInfo) {
   );
   UiSize_copy(&genInfo.size, &specInfo->size);
 
-  size_t child = UI_addChild(self, &genInfo);
-  __UI_initText(&self->children[child], specInfo);
+  UI_t *child = UI_addChild(self, &genInfo);
+  __UI_initText(child, specInfo);
 
   return child;
 }

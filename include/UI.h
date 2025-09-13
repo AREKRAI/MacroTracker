@@ -70,9 +70,7 @@ void __UI_updateMatrix(UI_t *self);
 void UI_setPosition(UI_t *self, vec2 newPosition);
 void UI_setSize(UI_t *self, UiSize_t newSize);
 Result_t UI_init(UI_t *self, UiInfo_t *info);
-
-// RETURN: UI ID -> CURRENTLY INDEX
-size_t UI_addChild(UI_t *self, UiInfo_t *info);
+UI_t *UI_addChild(UI_t *self, UiInfo_t *info);
 void UI_destroy(UI_t *self);
 
 typedef enum __ContainerFlag_t {
@@ -95,8 +93,7 @@ typedef struct __UiContainerInfo_t {
 } UiContainerInfo_t;
 
 void __UI_initContainer(UI_t *self, UiContainerInfo_t *specInfo);
-// RETURN: UI ID -> CURRENTLY INDEX
-size_t UI_addChildContainer(UI_t *self, UiContainerInfo_t *specInfo);
+UI_t *UI_addChildContainer(UI_t *self, UiContainerInfo_t *specInfo);
 
 typedef void(*UiCBCK_t)(void *, UI_t *);
 
@@ -115,9 +112,7 @@ typedef struct __UiButtonInfo_t {
 } UiButtonInfo_t;
 
 void __UI_initButton(UI_t *self, UiButtonInfo_t *specInfo);
-
-// RETURN: UI ID -> CURRENTLY INDEX
-size_t UI_addChildButton(UI_t *self, UiButtonInfo_t *specInfo);
+UI_t *UI_addChildButton(UI_t *self, UiButtonInfo_t *specInfo);
 bool UI_isHovered(UI_t* self, vec2 mouseWorldPos);
 
 void UI_processMouseInput(UI_t* self, vec2 mouseWorldPos);
@@ -135,7 +130,6 @@ typedef struct __UiTextInfo_t {
 } UiTextInfo_t;
 
 void __UI_initText(UI_t *self, UiTextInfo_t *specInfo);
-// RETURN: UI ID -> CURRENTLY INDEX
-size_t UI_addChildText(UI_t *self, UiTextInfo_t *specInfo);
+UI_t *UI_addChildText(UI_t *self, UiTextInfo_t *specInfo);
 
 #endif

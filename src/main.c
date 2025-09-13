@@ -1298,7 +1298,7 @@ Result_t _App_initUI(App_t *app) {
   };
 
   __UI_initContainer(&app->_uiRoot, &containerInfo);
-  size_t hotbarContainer = UI_addChildContainer(&app->_uiRoot, &containerInfo);
+  UI_t *hotbarContainer = UI_addChildContainer(&app->_uiRoot, &containerInfo);
 
   UiButtonInfo_t buttonInfo = {
     .color = COLOR_PRIMARY,
@@ -1312,11 +1312,7 @@ Result_t _App_initUI(App_t *app) {
     },
   };
   
-  size_t bigButton = UI_addChildButton(&app->_uiRoot.children[hotbarContainer], &buttonInfo);
-  buttonInfo.size.width = 0.5f;
-  buttonInfo.size.height = 0.25f;
-  buttonInfo.position[0] = 1.f;
-  UI_addChildButton(&app->_uiRoot.children[hotbarContainer], &buttonInfo);
+  UI_t *bigButton = UI_addChildButton(hotbarContainer, &buttonInfo);
 
   UiTextInfo_t textInfo = {
     .color = COLOR_BLACK,
@@ -1328,8 +1324,20 @@ Result_t _App_initUI(App_t *app) {
     },
     .str = "Add"
   };
-  UI_addChildText(&app->_uiRoot.children[hotbarContainer].children[bigButton], &textInfo);
+  UI_addChildText(bigButton, &textInfo);
 
+  buttonInfo = (UiButtonInfo_t) {
+    .color = COLOR_PRIMARY,
+    .onHoverColor = COLOR_SECONDARY,
+    .onClick = __testButtonCallback,
+    .position = {1.f, 0},
+    .size = (UiSize_t) {
+      .flag = UI_SIZE_FLAG_REAL,
+      .width = 0.5f,
+      .height = 0.25f
+    },
+  };
+  UI_addChildButton(hotbarContainer, &buttonInfo);
   return RESULT_SUCCESS;
 }
 

@@ -74,7 +74,7 @@ typedef struct __Glyph_t {
   vec2 size;
   vec2 bearing;
 
-  _Bool isWhitespace;
+  bool isWhitespace;
 
   GLuint glTextureHandle;
   u32vec2 advance;
@@ -126,12 +126,12 @@ typedef struct __App_t {
   } _draw;
 
   GLFWwindow *_wnd;
-  _Bool _running;
+  bool _running;
 
   double _lastTime;
   double _deltaTime;
 
-  _Bool _camMoving;
+  bool _camMoving;
   vec2 camera, _camNew, _camStart;
 
   vec2 _mouseStart;
@@ -148,7 +148,7 @@ typedef struct __App_t {
 #define FPS_LIMIT 144
 #define FRAME_TIME (1.0 / FPS_LIMIT)
 
-_Bool __App_frameTimeElapsed(App_t *app) {
+bool __App_frameTimeElapsed(App_t *app) {
   double newTime = glfwGetTime();
   double delta = newTime - app->_lastTime;
   if (delta < FRAME_TIME) {
@@ -233,7 +233,7 @@ void _App_UI_onClick(App_t *app, UI_t* self, vec2 mouseWorldPos) {
       _App_UI_onClick(app, child, mouseWorldPos);
   }
 
-  _Bool hovered = UI_isHovered(self, mouseWorldPos);
+  bool hovered = UI_isHovered(self, mouseWorldPos);
 
   if (!hovered)
     return;
@@ -304,13 +304,16 @@ void _App_wndInputCBCK(GLFWwindow* window,
     int key, int scancode, int action, int mods) {
   App_t *app = glfwGetWindowUserPointer(window);
 
-  if (action != GLFW_PRESS)
+  if (action != GLFW_PRESS && action != GLFW_REPEAT)
     return;
 
   if (key == GLFW_KEY_BACKSPACE) {
     UStr_trimEnd(&app->input, 1);
   }
   
+  if (action != GLFW_PRESS)
+    return;
+
   if (key != GLFW_KEY_ESCAPE)
     return;
 
@@ -956,26 +959,158 @@ skip_glyph_rendering:
   }
 }
 
-void _Draw_UI(App_t* app, UI_t *ui) {
-  glm_mat4_copy(app->_draw._projection, app->_draw._globalUBData.projectionView);
-  glNamedBufferSubData(app->_draw._globalUB, 0,
-    sizeof(_GlobalUBData_t), &app->_draw._globalUBData
-  );
+void _Draw_calculateUiTextSize(App_t* app, UI_t *ui, vec2 out) {
+  UiText_t *text = ui->_unique;
 
-  _LocalUBData2D_t ubData = {0};
-  glm_mat4_copy(ui->_matrix, ubData.model);
-  glm_vec4_copy(ui->_color, ubData.color);
+  out[0] = 0;
+  out[1] = 0;
 
-  glNamedBufferSubData(app->_draw._localUB, 0,
-    sizeof(_LocalUBData2D_t), &ubData
-  );
+  int wwidth = 0, wheight = 0;
+  glfwGetFramebufferSize(app->_wnd, &wwidth, &wheight);
+  // TODO: add font size to the text struct
+  const float normalizationFactor = 14 / 
+    ((float)FONT_SIZE * wheight);
+  // DOESN'T TAKE X/Y SPACING INTO ACCOUNT
+  const float scaleX = normalizationFactor;
+  const float scaleY = normalizationFactor;
 
-  glUseProgram(app->_draw._flatShader);
-  glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->_draw._globalUB); 
-  glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->_draw._localUB);
+  uint32_t peakYAdvance = 0;
+  float peakYBearing = 0;
+
+  for (UC_t *code_point = text->str.str; code_point < &text->str.str[text->str.count + 1]; code_point++) {
+    _Glyph_t *glyph = _Draw_getGlyphOrLoad(app, *code_point);
+    out[0] += ((glyph->advance[0] >> 6) / 2.f) * scaleX;
+
+    vec3 glyphPosition = {
+      0.f
+    };
+
+    out[0] += ((glyph->advance[0] >> 6) / 2.f) * scaleX;
+    
+    peakYAdvance = glyph->advance[1] > peakYAdvance ?
+      glyph->advance[1] : peakYAdvance;
+
+    peakYBearing = glyph->bearing[1] > peakYBearing ?
+      glyph->bearing[1] : peakYBearing;
+    if (*code_point == '\n') {
+      out[1] -= ((peakYAdvance >> 6) + peakYBearing) * scaleY;
+
+      out[0] = 0;
+    }
+  }
+
+}
+
+void _Draw_UiText(App_t* app, UI_t *ui) {
+  UiText_t *text = ui->_unique;
+
+  glUseProgram(app->_draw._texShader);
+  glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->_draw._globalUB);
   glBindVertexArray(app->_draw._quadVAO);
-  glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
+  _LocalUBData2D_t ubData = {
+    .color = COLOR_RED,
+    .model = GLM_MAT4_IDENTITY_INIT
+  };
+
+  vec2 halfSize = {0};
+  _Draw_calculateUiTextSize(app, ui, halfSize);
+  glm_vec2_scale(halfSize, 0.5f, halfSize);
+
+  vec2 lPos = {0};
+
+  int wwidth = 0, wheight = 0;
+  glfwGetFramebufferSize(app->_wnd, &wwidth, &wheight);
+  // TODO: add font size to the text struct
+  const float normalizationFactor = 14 / 
+    ((float)FONT_SIZE * wheight);
+  // DOESN'T TAKE X/Y SPACING INTO ACCOUNT
+  const float scaleX = normalizationFactor;
+  const float scaleY = normalizationFactor;
+
+  uint32_t peakYAdvance = 0;
+  float peakYBearing = 0;
+
+  for (UC_t *code_point = text->str.str; code_point < &text->str.str[text->str.count + 1]; code_point++) {
+      _Glyph_t *glyph = _Draw_getGlyphOrLoad(app, *code_point);
+      lPos[0] += ((glyph->advance[0] >> 6) / 2.f) * scaleX;
+
+      if (glyph->isWhitespace || *code_point == '\n')
+        goto skip_ui_glyph_rendering;
+
+      vec3 glyphPosition = {
+        0.f
+      };
+
+      mat4 modelMatrix = GLM_MAT4_IDENTITY_INIT;
+      glm_translate(modelMatrix, (vec3) {
+        lPos[0] + glyph->bearing[0] * scaleX - halfSize[0],
+        lPos[1] - (glyph->size[1] / 2.f - glyph->bearing[1]) * scaleY - halfSize[1],
+        0.f
+      });
+      glm_scale(modelMatrix, (vec3) {
+        glyph->size[0] * scaleX,
+        glyph->size[1] * scaleY
+      });
+
+      _LocalUBData2D_t ubData = {0};
+      glm_mat4_mul(ui->_matrix, modelMatrix, ubData.model);
+      glm_vec4_copy(ui->_color, ubData.color);
+
+      glNamedBufferSubData(app->_draw._localUB, 0,
+        sizeof(_LocalUBData2D_t), &ubData
+      );
+      glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->_draw._localUB);
+      glBindTextureUnit(0, glyph->glTextureHandle);
+      glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+      
+skip_ui_glyph_rendering:
+      lPos[0] += ((glyph->advance[0] >> 6) / 2.f) * scaleX;
+      
+      peakYAdvance = glyph->advance[1] > peakYAdvance ?
+        glyph->advance[1] : peakYAdvance;
+
+      peakYBearing = glyph->bearing[1] > peakYBearing ?
+        glyph->bearing[1] : peakYBearing;
+      if (*code_point == '\n') {
+        lPos[1] -= ((peakYAdvance >> 6) + peakYBearing) * scaleY;
+
+        lPos[0] = 0;
+    }
+  }
+}
+void _Draw_UI(App_t* app, UI_t *ui) {
+  if (ui->hide)
+    goto skip_ui_render;
+
+  switch (ui->_type) {
+    case UI_EL_TYPE_TEXT: {
+      _Draw_UiText(app, ui);
+      break;
+    }
+    default:
+      glm_mat4_copy(app->_draw._projection, app->_draw._globalUBData.projectionView);
+      glNamedBufferSubData(app->_draw._globalUB, 0,
+        sizeof(_GlobalUBData_t), &app->_draw._globalUBData
+      );
+
+      _LocalUBData2D_t ubData = {0};
+      glm_mat4_copy(ui->_matrix, ubData.model);
+      glm_vec4_copy(ui->_color, ubData.color);
+
+      glNamedBufferSubData(app->_draw._localUB, 0,
+        sizeof(_LocalUBData2D_t), &ubData
+      );
+
+      glUseProgram(app->_draw._flatShader);
+      glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->_draw._globalUB); 
+      glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->_draw._localUB);
+      glBindVertexArray(app->_draw._quadVAO);
+      glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+      break;
+  }
+
+skip_ui_render:
   for (UI_t *child = ui->children;
     child < &ui->children[ui->childCount]; child++) {
     _Draw_UI(app, child);
@@ -1138,6 +1273,7 @@ void __testButtonCallback(App_t  *app, UI_t *self) {
 Result_t _App_initUI(App_t *app) {
   UiInfo_t info = {
     .color = COLOR_TRANSPARENT,
+    .hide = false,
     .parent = NULL,
     .position = {0.f, 0.f},
     .size = (UiSize_t) {
@@ -1151,7 +1287,7 @@ Result_t _App_initUI(App_t *app) {
   UI_init(&app->_uiRoot, &info);
 
   UiContainerInfo_t containerInfo = {
-    .color = COLOR_WHITE,
+    .color = COLOR_BASE,
     .size = (UiSize_t) {
       .flag = UI_SIZE_FLAG_FILL_WIDTH,
       .width = 1.0,
@@ -1162,11 +1298,11 @@ Result_t _App_initUI(App_t *app) {
   };
 
   __UI_initContainer(&app->_uiRoot, &containerInfo);
-  UI_t *hotbarContainer = UI_addChildContainer(&app->_uiRoot, &containerInfo);
+  size_t hotbarContainer = UI_addChildContainer(&app->_uiRoot, &containerInfo);
 
   UiButtonInfo_t buttonInfo = {
-    .color = {0.7, 0.2f, 0.5, 1.0},
-    .onHoverColor = {0.f, 1.f, 0.f, 1.f},
+    .color = COLOR_PRIMARY,
+    .onHoverColor = COLOR_SECONDARY,
     .onClick = __testButtonCallback,
     .position = {0, 0},
     .size = (UiSize_t) {
@@ -1175,11 +1311,24 @@ Result_t _App_initUI(App_t *app) {
       .height = 0.4f
     },
   };
-  UI_addChildButton(hotbarContainer, &buttonInfo);
+  
+  size_t bigButton = UI_addChildButton(&app->_uiRoot.children[hotbarContainer], &buttonInfo);
   buttonInfo.size.width = 0.5f;
   buttonInfo.size.height = 0.25f;
   buttonInfo.position[0] = 1.f;
-  UI_addChildButton(hotbarContainer, &buttonInfo);
+  UI_addChildButton(&app->_uiRoot.children[hotbarContainer], &buttonInfo);
+
+  UiTextInfo_t textInfo = {
+    .color = COLOR_BLACK,
+    .position = {0},
+    .size = (UiSize_t) {
+      .flag = UI_SIZE_FLAG_REAL,
+      .width = 5.f,
+      .height = 5.f
+    },
+    .str = "Add"
+  };
+  UI_addChildText(&app->_uiRoot.children[hotbarContainer].children[bigButton], &textInfo);
 
   return RESULT_SUCCESS;
 }

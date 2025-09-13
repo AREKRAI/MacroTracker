@@ -41,10 +41,10 @@ typedef enum _Result {
 #include <log.h>
 
 #ifdef APP_DEBUG
-#define DEBUG_ASSERT(expr, ...) do {                                       \
-  if (expr) break;                                                            \
+#define DEBUG_ASSERT(expr, ...) do {                                           \
+  if (expr) break;                                                             \
   log_error("Expression (" EXPR_STR(expr) ") has failed: " ENDL, __VA_ARGS__); \
-  DEBUG_BREAK();                                                              \
+  DEBUG_BREAK();                                                               \
   } while (0)
 #else
 #define DEBUG_ASSERT(...)
@@ -53,5 +53,12 @@ typedef enum _Result {
 #define COLOR_WHITE       { 1.f, 1.f, 1.f, 1.f }
 #define COLOR_RED         { 1.f, 0.f, 0.f, 1.f }
 #define COLOR_TRANSPARENT { 0.f, 0.f, 0.f, 0.f }
+#define COLOR_BLACK       { 0.f, 0.f, 0.f, 1.f }
+
+#define HEX_TO_FLOAT(x)   { (x >> 24) / 256.f, ((x << 8) >> 24) / 256.f, ((x << 16) >> 24) / 256.f, ((x << 24) >> 24) }
+
+#define COLOR_BASE      HEX_TO_FLOAT(0x93CEE1FF) 
+#define COLOR_PRIMARY   HEX_TO_FLOAT(0xE193CEFF) 
+#define COLOR_SECONDARY HEX_TO_FLOAT(0xCEE193FF)
 
 #endif

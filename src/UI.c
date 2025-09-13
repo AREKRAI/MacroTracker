@@ -70,6 +70,7 @@ Result_t UI_init(UI_t *self, UiInfo_t *info) {
 
   self->_type = info->type;
   self->parent = info->parent;
+  self->hide = info->hide;
 
   memcpy(self->_pos, info->position, sizeof(vec2));
   UiSize_copy(&self->_size, &info->size);
@@ -80,8 +81,9 @@ Result_t UI_init(UI_t *self, UiInfo_t *info) {
   return EXIT_SUCCESS;
 }
 
-UI_t *UI_addChild(UI_t *self, UiInfo_t *info) {
+size_t UI_addChild(UI_t *self, UiInfo_t *info) {
   self->childCount++;
+
   while (self->childCount * sizeof(UI_t) > self->childCap) {
     self->childCap <<= 1;
   }
@@ -91,7 +93,7 @@ UI_t *UI_addChild(UI_t *self, UiInfo_t *info) {
   info->parent = self;
   UI_init(child, info);
 
-  return child;
+  return self->childCount - 1;
 }
 
 void UI_destroy(UI_t *self) {
@@ -101,6 +103,8 @@ void UI_destroy(UI_t *self) {
   }
 
   switch (self->_type) {
+    case UI_EL_TYPE_TEXT:
+      UStr_destroy(&((UiText_t *)self->_unique)->str);
     case UI_EL_TYPE_BUTTON:
     case UI_EL_TYPE_CONTAINER:
       free(self->_unique);
@@ -120,10 +124,10 @@ void __UI_initContainer(UI_t *self, UiContainerInfo_t *specInfo) {
   };
 }
 
-UI_t *UI_addChildContainer(UI_t *self, UiContainerInfo_t *specInfo) {
+size_t UI_addChildContainer(UI_t *self, UiContainerInfo_t *specInfo) {
   UiInfo_t genInfo = {
     .type = UI_EL_TYPE_CONTAINER,
-    .parent = NULL,
+    .parent = self,
   };
 
   DEBUG_ASSERT(
@@ -144,8 +148,8 @@ UI_t *UI_addChildContainer(UI_t *self, UiContainerInfo_t *specInfo) {
   );
   UiSize_copy(&genInfo.size, &specInfo->size);
 
-  UI_t *child = UI_addChild(self, &genInfo);
-  __UI_initContainer(child, specInfo);
+  size_t child = UI_addChild(self, &genInfo);
+  __UI_initContainer(&self->children[child], specInfo);
 
   return child;
 }
@@ -163,10 +167,11 @@ void __UI_initButton(UI_t *self, UiButtonInfo_t *specInfo) {
   memcpy(unique->onHoverColor, specInfo->onHoverColor, sizeof(unique->onHoverColor));
 }
 
-UI_t *UI_addChildButton(UI_t *self, UiButtonInfo_t *specInfo) {
+size_t UI_addChildButton(UI_t *self, UiButtonInfo_t *specInfo) {
   UiInfo_t genInfo = {
     .type = UI_EL_TYPE_BUTTON,
-    .parent = NULL,
+    .hide = false,
+    .parent = self,
   };
 
   DEBUG_ASSERT(
@@ -187,8 +192,8 @@ UI_t *UI_addChildButton(UI_t *self, UiButtonInfo_t *specInfo) {
   );
   UiSize_copy(&genInfo.size, &specInfo->size);
 
-  UI_t *child = UI_addChild(self, &genInfo);
-  __UI_initButton(child, specInfo);
+  size_t child = UI_addChild(self, &genInfo);
+  __UI_initButton(&self->children[child], specInfo);
 
   return child;
 }
@@ -239,4 +244,40 @@ void UI_processMouseInput(UI_t* self, vec2 mouseWorldPos) {
     default:
       break;
   }
+}
+
+void __UI_initText(UI_t *self, UiTextInfo_t *specInfo) {
+  UiText_t *unique = (self->_unique = malloc(sizeof(UiText_t)));
+  UStr_init(&unique->str, specInfo->str);
+}
+
+size_t UI_addChildText(UI_t *self, UiTextInfo_t *specInfo) {
+  UiInfo_t genInfo = {
+    .type = UI_EL_TYPE_TEXT,
+    .hide = false,
+    .parent = self,
+  };
+
+  DEBUG_ASSERT(
+    sizeof(genInfo.color) == sizeof(specInfo->color), 
+    "genInfo.color and specInfo->color must be of same type"
+  );
+  memcpy(genInfo.color, specInfo->color, sizeof(genInfo.color));
+
+  DEBUG_ASSERT(
+    sizeof(genInfo.position) == sizeof(specInfo->position), 
+    "genInfo.position and specInfo->position must be of same type"
+  );
+  memcpy(genInfo.position, specInfo->position, sizeof(genInfo.position));
+
+  DEBUG_ASSERT(
+    sizeof(genInfo.size) == sizeof(specInfo->size), 
+    "genInfo.size and specInfo->size must be of same type"
+  );
+  UiSize_copy(&genInfo.size, &specInfo->size);
+
+  size_t child = UI_addChild(self, &genInfo);
+  __UI_initText(&self->children[child], specInfo);
+
+  return child;
 }

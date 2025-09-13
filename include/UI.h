@@ -15,7 +15,7 @@ typedef enum __UiElType_t {
   UI_EL_TYPE_INPUT = 3
 } UiElType_t;
 
-#define DEFAULT_CHILD_CAP ((size_t)1 << 7)
+#define DEFAULT_CHILD_CAP (1 << 8)
 
 // TODO: implement atlas
 
@@ -43,6 +43,7 @@ typedef struct __UI_t {
   size_t childCount, childCap;
 
   UiElType_t _type;
+  bool hide;
   void *_unique;
 
   UiSize_t _size;
@@ -55,6 +56,7 @@ typedef struct __UI_t {
 
 typedef struct __UiInfo_t {
   UiElType_t type;
+  bool hide;
 
   UiSize_t size;
   vec2 position;
@@ -68,7 +70,9 @@ void __UI_updateMatrix(UI_t *self);
 void UI_setPosition(UI_t *self, vec2 newPosition);
 void UI_setSize(UI_t *self, UiSize_t newSize);
 Result_t UI_init(UI_t *self, UiInfo_t *info);
-UI_t *UI_addChild(UI_t *self, UiInfo_t *info);
+
+// RETURN: UI ID -> CURRENTLY INDEX
+size_t UI_addChild(UI_t *self, UiInfo_t *info);
 void UI_destroy(UI_t *self);
 
 typedef enum __ContainerFlag_t {
@@ -91,7 +95,8 @@ typedef struct __UiContainerInfo_t {
 } UiContainerInfo_t;
 
 void __UI_initContainer(UI_t *self, UiContainerInfo_t *specInfo);
-UI_t *UI_addChildContainer(UI_t *self, UiContainerInfo_t *specInfo);
+// RETURN: UI ID -> CURRENTLY INDEX
+size_t UI_addChildContainer(UI_t *self, UiContainerInfo_t *specInfo);
 
 typedef void(*UiCBCK_t)(void *, UI_t *);
 
@@ -110,9 +115,27 @@ typedef struct __UiButtonInfo_t {
 } UiButtonInfo_t;
 
 void __UI_initButton(UI_t *self, UiButtonInfo_t *specInfo);
-UI_t *UI_addChildButton(UI_t *self, UiButtonInfo_t *specInfo);
+
+// RETURN: UI ID -> CURRENTLY INDEX
+size_t UI_addChildButton(UI_t *self, UiButtonInfo_t *specInfo);
 bool UI_isHovered(UI_t* self, vec2 mouseWorldPos);
 
 void UI_processMouseInput(UI_t* self, vec2 mouseWorldPos);
+
+typedef struct __UiText_t {
+  UStr_t str;
+} UiText_t;
+
+typedef struct __UiTextInfo_t {
+  const char *str;
+  vec4 color;
+
+  UiSize_t size;
+  vec2 position;
+} UiTextInfo_t;
+
+void __UI_initText(UI_t *self, UiTextInfo_t *specInfo);
+// RETURN: UI ID -> CURRENTLY INDEX
+size_t UI_addChildText(UI_t *self, UiTextInfo_t *specInfo);
 
 #endif

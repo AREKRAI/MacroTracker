@@ -103,6 +103,7 @@ void UI_destroy(UI_t *self) {
   }
 
   switch (self->type) {
+    case UI_EL_TYPE_INPUT:
     case UI_EL_TYPE_TEXT:
       UStr_destroy(&((UiText_t *)self->_unique)->str);
     case UI_EL_TYPE_BUTTON:
@@ -221,31 +222,6 @@ bool UI_isHovered(UI_t* self, vec2 mouseWorldPos) {
   return hovered;
 }
 
-void UI_processMouseInput(UI_t* self, vec2 mouseWorldPos) {
-  for (UI_t *child = self->children;
-    child < &self->children[self->childCount]; child++) {
-      UI_processMouseInput(child, mouseWorldPos);
-  }
-
-  bool hovered = UI_isHovered(self, mouseWorldPos);
-
-  switch (self->type) {
-    case UI_EL_TYPE_BUTTON: {
-      UiButton_t *unique = self->_unique;
-
-      if (hovered) {
-        memcpy(self->_color, unique->onHoverColor, sizeof(self->_color));
-      } else {
-        memcpy(self->_color, self->color, sizeof(self->_color));
-      }
-      
-      break;
-    }
-    default:
-      break;
-  }
-}
-
 void __UI_initText(UI_t *self, UiTextInfo_t *specInfo) {
   UiText_t *unique = (self->_unique = malloc(sizeof(UiText_t)));
   UStr_init(&unique->str, specInfo->str);
@@ -316,16 +292,108 @@ bool EventQueue_pop(EventQueue_t *self, Event_t *ev) {
 }
 
 bool UI_buttonProcessEvent(UI_t *self, void *ctx, Event_t *ev) {
-  if (ev->type != EVENT_TYPE_CLICK)
-    return false;
-  
+  UiButton_t *unique = self->_unique;
   bool hovered = UI_isHovered(self, ev->position);
 
-  if (!hovered)
-    return false;
-  
-  UiButton_t *unique = self->_unique;
-  unique->onClick(ctx, self);
+  switch(ev->type) {
+    case EVENT_TYPE_CLICK: {
+      if (!hovered)
+        return false;
 
-  return true;
+      unique->onClick(ctx, self);
+      return true;
+    }
+    case EVENT_TYPE_MOUSE_MOVE: {
+      if (hovered)
+        memcpy(self->_color, unique->onHoverColor, sizeof(self->_color));
+      else
+        memcpy(self->_color, self->color, sizeof(self->_color));
+
+      return false; // NEVER ABSORB
+    }
+    default:
+      break;
+  }
+
+  return false;
+}
+
+void __UI_initInput(UI_t *self, UiInputInfo_t *specInfo) {
+  UiInput_t *unique = (self->_unique = malloc(sizeof(UiInput_t)));
+  UStr_init(&unique->str, specInfo->str);
+  unique->focus = false;
+}
+
+UI_t *UI_addChildInput(UI_t *self, UiInputInfo_t *specInfo) {
+  UiInfo_t genInfo = {
+    .type = UI_EL_TYPE_INPUT,
+    .hide = false,
+    .parent = self,
+  };
+
+  DEBUG_ASSERT(
+    sizeof(genInfo.color) == sizeof(specInfo->color), 
+    "genInfo.color and specInfo->color must be of same type"
+  );
+  memcpy(genInfo.color, specInfo->color, sizeof(genInfo.color));
+
+  DEBUG_ASSERT(
+    sizeof(genInfo.position) == sizeof(specInfo->position), 
+    "genInfo.position and specInfo->position must be of same type"
+  );
+  memcpy(genInfo.position, specInfo->position, sizeof(genInfo.position));
+
+  DEBUG_ASSERT(
+    sizeof(genInfo.size) == sizeof(specInfo->size), 
+    "genInfo.size and specInfo->size must be of same type"
+  );
+  UiSize_copy(&genInfo.size, &specInfo->size);
+
+  UI_t *child = UI_addChild(self, &genInfo);
+  __UI_initInput(child, specInfo);
+
+  return child;
+}
+
+bool UI_inputProcessEvent(UI_t *self, Event_t *ev) {
+  UiInput_t *unique = self->_unique;
+  bool hovered = UI_isHovered(self, ev->position);
+
+  // TODO: create a way of deactivation -> event that gets sent out when something is focused
+  switch(ev->type) {
+    case EVENT_TYPE_CLICK: {
+      if (!hovered) {
+        if (unique->focus) {
+          unique->focus = false;
+        }
+        return false;
+      }
+
+      unique->focus = true;
+      return true;
+    }
+    case EVENT_TYPE_CHAR_INPUT: {
+      if (!unique->focus)
+        return false;
+
+      UStr_pushUC(&unique->str, ev->character);
+      return true;
+    }
+    case EVENT_TYPE_KEY: {
+      if (!unique->focus)
+        return false;
+
+      if (ev->glfwAction != GLFW_REPEAT && ev->glfwAction != GLFW_PRESS)
+        return false;
+      if (ev->glfwKey != GLFW_KEY_BACKSPACE)
+        return false;
+
+      UStr_trimEnd(&unique->str, 1);
+      return true;
+    }
+    default:
+      break;
+  }
+
+  return false;
 }

@@ -18,6 +18,10 @@ typedef enum __UiElType_t {
 #define DEFAULT_CHILD_CAP (1 << 8)
 
 // TODO: implement atlas
+// TODO: MAKE IT SAFE TO ADD UI IN ANY ORDER
+// -> FIX THE ISSUE WHERE PARENT MEMORY GETS REALLOCED LOSING REFERENCE WITH CHILD POINTERS
+// POSSIBLE FIXES -> ID SYSTEM, BUFFERING MEMORY REALLOCATION (HAVING TWO BUFFERS, ONE YOU SUBMIT CHANGES TO AND A FINAL ONE WHICH INTEGRATES THEM,
+// KEEPING BUFFERS YOU HAVE A POINTER TO - NO WAY OF KNOWING IF THE POINTER'S BEEN DROPPED OUT OF SCOPE)
 
 typedef enum __UI_SIZE_FLAG_T {
   UI_SIZE_FLAG_REAL = 0,
@@ -38,6 +42,7 @@ typedef struct __UiSize_t {
 
 void UiSize_copy(UiSize_t *dst, UiSize_t *src);
 
+// TODO: ADD IDs 
 typedef struct __UI_t {
   struct __UI_t *children, *parent;
   size_t childCount, childCap;
@@ -115,7 +120,7 @@ void __UI_initButton(UI_t *self, UiButtonInfo_t *specInfo);
 UI_t *UI_addChildButton(UI_t *self, UiButtonInfo_t *specInfo);
 bool UI_isHovered(UI_t* self, vec2 mouseWorldPos);
 
-void UI_processMouseInput(UI_t* self, vec2 mouseWorldPos);
+// TODO: get text and input to have an actual size in the rendering front end
 
 typedef struct __UiText_t {
   UStr_t str;
@@ -132,12 +137,19 @@ typedef struct __UiTextInfo_t {
 void __UI_initText(UI_t *self, UiTextInfo_t *specInfo);
 UI_t *UI_addChildText(UI_t *self, UiTextInfo_t *specInfo);
 
+// REMOVE THIS IN THE FUTURE
+// BY COPYING THE GLFW KEY MAPPING AND RENAMING IT
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
+
 // TODO: EVENT SYSTEM
 typedef enum __EVENT_TYPE_t {
   EVENT_TYPE_NONE = 0, // EVIL
   EVENT_TYPE_CLICK = 1,
   EVENT_TYPE_CHAR_INPUT = 2,
-  EVENT_TYPE_BUTTON
+  EVENT_TYPE_MOUSE_MOVE = 3,
+  EVENT_TYPE_FOCUS_SET = 4,
+  EVENT_TYPE_KEY
 } EVENT_TYPE_t;
 
 typedef struct __Event_t {
@@ -163,20 +175,24 @@ void EventQueue_cleanup(EventQueue_t *self);
 void EventQueue_push(EventQueue_t *self, Event_t *ev);
 bool EventQueue_pop(EventQueue_t *self, Event_t *ev);
 
+// RETURNS: EVENT ABSORBED
 bool UI_buttonProcessEvent(UI_t *self, void *ctx, Event_t *ev);
-// TODO: INPUT
-// typedef struct __UiInput_t {
-//   UStr_t str;
-// } UiInput_t;
-// 
-// typedef struct __UiInputInfo_t {
-//   const char *str;
-//   vec4 color;
-// 
-//   UiSize_t size;
-//   vec2 position;
-// } UiInputInfo_t;
-// 
-// void __UI_initInput(UI_t *self, UiTextInfo_t *specInfo);
-// UI_t *UI_addChildInput(UI_t *self, UiTextInfo_t *specInfo);
+
+typedef struct __UiInput_t {
+  UStr_t str;
+  bool focus;
+} UiInput_t;
+
+typedef struct __UiInputInfo_t {
+  const char *str;
+  vec4 color;
+
+  UiSize_t size;
+  vec2 position;
+} UiInputInfo_t;
+
+void __UI_initInput(UI_t *self, UiInputInfo_t *specInfo);
+UI_t *UI_addChildInput(UI_t *self, UiInputInfo_t *specInfo);
+bool UI_inputProcessEvent(UI_t *self, Event_t *ev);
+
 #endif

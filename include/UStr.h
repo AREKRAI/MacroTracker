@@ -8,13 +8,6 @@
 // UNICODE CHARACTER
 typedef unsigned int UC_t;
 
-// UNUSED
-typedef struct __UStrView_t {
-  size_t count;
-  UC_t *str;
-} UStrView_t;
-
-// UNUSED
 typedef struct __UStr_t {
   size_t count;
   size_t cap;

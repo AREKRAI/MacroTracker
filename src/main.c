@@ -228,33 +228,6 @@ inline void _App_getMouseWorldPosition(App_t *app, vec2 result) {
   result[1] = cursorPos[1];
 }
 
-// TODO: DELETE THIS REPLACED BY EVENT SYSTEM
-void _App_UI_onClick(App_t *app, UI_t* self, vec2 mouseWorldPos) {
-  for (UI_t *child = self->children;
-    child < &self->children[self->childCount]; child++) {
-      _App_UI_onClick(app, child, mouseWorldPos);
-  }
-
-  bool hovered = UI_isHovered(self, mouseWorldPos);
-
-  if (!hovered)
-    return;
-
-  switch (self->type) {
-    case UI_EL_TYPE_BUTTON: {
-      UiButton_t *unique = self->_unique;
-
-      if (unique->onClick == NULL)
-        break;
-
-      unique->onClick(app, self);
-      break;
-    }
-    default:
-      break;
-  }
-}
-
 void  _App_updateCamera(App_t *app) {
   if (app->_camMoving) {
     vec2 cPos = {0};
@@ -297,12 +270,11 @@ void _App_wndMouseBtnCBCK(GLFWwindow* window, int button, int action, int mods) 
   if (action != GLFW_RELEASE)
     return;
 
-  vec2 cPos = {0};
-  _App_getMouseScreenNormalizedCentered(app, cPos);
   Event_t payload = {
     .type = EVENT_TYPE_CLICK,
-    .position = { cPos[0], cPos[1] }
+    .position = {0}
   };
+  _App_getMouseScreenNormalizedCentered(app, payload.position);
   EventQueue_push(&app->_evQueue, &payload);
   // _App_UI_onClick(app, &app->_uiRoot, cPos);
 }
@@ -310,6 +282,13 @@ void _App_wndMouseBtnCBCK(GLFWwindow* window, int button, int action, int mods) 
 void _App_wndInputCBCK(GLFWwindow* window,
     int key, int scancode, int action, int mods) {
   App_t *app = glfwGetWindowUserPointer(window);
+
+  Event_t payload = {
+    .type = EVENT_TYPE_KEY,
+    .glfwAction = action,
+    .glfwKey = key
+  };
+  EventQueue_push(&app->_evQueue, &payload);
 
   if (action != GLFW_PRESS && action != GLFW_REPEAT)
     return;
@@ -892,6 +871,12 @@ typedef struct __TextInfo_t {
 void _App_wndCharCBCK(GLFWwindow* window, unsigned int character) {
   App_t *app = glfwGetWindowUserPointer(window);
   UStr_pushUC(&app->input, character);
+
+  Event_t payload = {
+    .type = EVENT_TYPE_CHAR_INPUT,
+    .character = character
+  };
+  EventQueue_push(&app->_evQueue, &payload);
 }
 
 void _Draw_text(App_t *app, UStr_t *str,
@@ -1092,6 +1077,7 @@ void _Draw_UI(App_t* app, UI_t *ui) {
     goto skip_ui_render;
 
   switch (ui->type) {
+    case UI_EL_TYPE_INPUT:
     case UI_EL_TYPE_TEXT: {
       _Draw_UiText(app, ui);
       break;
@@ -1307,11 +1293,23 @@ Result_t _App_initUI(App_t *app) {
   __UI_initContainer(&app->_uiRoot, &containerInfo);
   UI_t *hotbarContainer = UI_addChildContainer(&app->_uiRoot, &containerInfo);
 
+  UiInputInfo_t inputInfo = {
+    .color = COLOR_SECONDARY,
+    .size = (UiSize_t) {
+      .flag = UI_SIZE_FLAG_REAL,
+      .width = 5.0f,
+      .height = 5.0f
+    },
+    .position = { 0.5, 0.5 },
+    .str = "Default Input"
+  };
+  UI_addChildInput(hotbarContainer, &inputInfo);
+
   UiButtonInfo_t buttonInfo = {
     .color = COLOR_PRIMARY,
     .onHoverColor = COLOR_SECONDARY,
     .onClick = __testButtonCallback,
-    .position = {1.f, 0},
+    .position = {0.5f, 0},
     .size = (UiSize_t) {
       .flag = UI_SIZE_FLAG_REAL,
       .width = 0.5f,
@@ -1353,8 +1351,10 @@ inline void _App_cleanupUI(App_t *app) {
 }
 
 bool _App_UIprocessEvent(App_t *app, UI_t *ui, Event_t *ev) {
-  for (UI_t *child = ui->children; 
-    child < &ui->children[ui->childCount]; child++) {
+  // REVERSE ORDER, BECAUSE LAST DRAWN IS AT THE END OF THE ARRAY
+  // TODO: MAYBE AN ACTIVE STATE THAT GETS DISABLED IF ANOTHER ELEMENT ABSORBS THE EVENT
+  for (UI_t *child = &ui->children[ui->childCount]; 
+    child >= ui->children; child--) {
     if (_App_UIprocessEvent(app, child, ev)) {
       return true;
     }
@@ -1363,6 +1363,8 @@ bool _App_UIprocessEvent(App_t *app, UI_t *ui, Event_t *ev) {
   switch (ui->type) {
     case UI_EL_TYPE_BUTTON:
       return UI_buttonProcessEvent(ui, app, ev);
+    case UI_EL_TYPE_INPUT:
+      return UI_inputProcessEvent(ui, ev);
     default:
       return false;
   }
@@ -1408,7 +1410,6 @@ void _App_update(App_t *app)
   // TEMP//REMOVE
   vec2 cPos = {0};
   _App_getMouseScreenNormalizedCentered(app, cPos);
-  UI_processMouseInput(&app->_uiRoot, cPos);
   
   Event_t ev = {0};
   while (EventQueue_pop(&app->_evQueue, &ev)) {
@@ -1477,6 +1478,17 @@ void _App_wndFbResizeCBCK(GLFWwindow *window, int width, int height) {
   _App_render(app);
 }
 
+void _App_wndCursorPosCBCK(GLFWwindow* window, double xpos, double ypos) {
+  App_t *app = glfwGetWindowUserPointer(window);
+  Event_t payload = {
+    .type = EVENT_TYPE_MOUSE_MOVE,
+    .position = {0}
+  };
+
+  _App_getMouseScreenNormalizedCentered(app, payload.position);
+  EventQueue_push(&app->_evQueue, &payload);
+}
+
 Result_t App_create(App_t** p_app, AppInfo_t info) {
   *p_app = malloc(sizeof(App_t));
 
@@ -1534,6 +1546,7 @@ Result_t App_create(App_t** p_app, AppInfo_t info) {
 
   glfwSetWindowUserPointer(window, *p_app);
   glfwSetWindowCloseCallback(window, _App_wndCloseCBCK);
+  glfwSetCursorPosCallback(window, _App_wndCursorPosCBCK);
   glfwSetKeyCallback(window, _App_wndInputCBCK);
   glfwSetMouseButtonCallback(window, _App_wndMouseBtnCBCK);
   glfwSetFramebufferSizeCallback(window, _App_wndFbResizeCBCK);

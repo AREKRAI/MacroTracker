@@ -140,6 +140,7 @@ typedef struct __App_t {
   UStr_t input;
   size_t _inCount, _inCap;
 
+  EventQueue_t _evQueue;
   UI_t _uiRoot;
 
   AppInfo_t info;
@@ -227,6 +228,7 @@ inline void _App_getMouseWorldPosition(App_t *app, vec2 result) {
   result[1] = cursorPos[1];
 }
 
+// TODO: DELETE THIS REPLACED BY EVENT SYSTEM
 void _App_UI_onClick(App_t *app, UI_t* self, vec2 mouseWorldPos) {
   for (UI_t *child = self->children;
     child < &self->children[self->childCount]; child++) {
@@ -238,7 +240,7 @@ void _App_UI_onClick(App_t *app, UI_t* self, vec2 mouseWorldPos) {
   if (!hovered)
     return;
 
-  switch (self->_type) {
+  switch (self->type) {
     case UI_EL_TYPE_BUTTON: {
       UiButton_t *unique = self->_unique;
 
@@ -297,7 +299,12 @@ void _App_wndMouseBtnCBCK(GLFWwindow* window, int button, int action, int mods) 
 
   vec2 cPos = {0};
   _App_getMouseScreenNormalizedCentered(app, cPos);
-  _App_UI_onClick(app, &app->_uiRoot, cPos);
+  Event_t payload = {
+    .type = EVENT_TYPE_CLICK,
+    .position = { cPos[0], cPos[1] }
+  };
+  EventQueue_push(&app->_evQueue, &payload);
+  // _App_UI_onClick(app, &app->_uiRoot, cPos);
 }
 
 void _App_wndInputCBCK(GLFWwindow* window,
@@ -1079,11 +1086,12 @@ skip_ui_glyph_rendering:
     }
   }
 }
+
 void _Draw_UI(App_t* app, UI_t *ui) {
   if (ui->hide)
     goto skip_ui_render;
 
-  switch (ui->_type) {
+  switch (ui->type) {
     case UI_EL_TYPE_TEXT: {
       _Draw_UiText(app, ui);
       break;
@@ -1263,7 +1271,6 @@ void _App_render(App_t *app) {
 }
 
 void __testButtonCallback(App_t  *app, UI_t *self) {
-  log_info("Button clicked" ENDL);
   vec2 newPosition = {0};
   glm_vec2_copy(self->_pos, newPosition);
   newPosition[1] += 0.01;
@@ -1304,6 +1311,20 @@ Result_t _App_initUI(App_t *app) {
     .color = COLOR_PRIMARY,
     .onHoverColor = COLOR_SECONDARY,
     .onClick = __testButtonCallback,
+    .position = {1.f, 0},
+    .size = (UiSize_t) {
+      .flag = UI_SIZE_FLAG_REAL,
+      .width = 0.5f,
+      .height = 0.25f
+    },
+  };
+
+  UI_addChildButton(hotbarContainer, &buttonInfo);
+  
+  buttonInfo = (UiButtonInfo_t) {
+    .color = COLOR_PRIMARY,
+    .onHoverColor = COLOR_SECONDARY,
+    .onClick = __testButtonCallback,
     .position = {0, 0},
     .size = (UiSize_t) {
       .flag = UI_SIZE_FLAG_REAL,
@@ -1311,7 +1332,6 @@ Result_t _App_initUI(App_t *app) {
       .height = 0.4f
     },
   };
-  
   UI_t *bigButton = UI_addChildButton(hotbarContainer, &buttonInfo);
 
   UiTextInfo_t textInfo = {
@@ -1322,27 +1342,30 @@ Result_t _App_initUI(App_t *app) {
       .width = 5.f,
       .height = 5.f
     },
-    .str = "Add"
+    .str = "Add Macro"
   };
   UI_addChildText(bigButton, &textInfo);
-
-  buttonInfo = (UiButtonInfo_t) {
-    .color = COLOR_PRIMARY,
-    .onHoverColor = COLOR_SECONDARY,
-    .onClick = __testButtonCallback,
-    .position = {1.f, 0},
-    .size = (UiSize_t) {
-      .flag = UI_SIZE_FLAG_REAL,
-      .width = 0.5f,
-      .height = 0.25f
-    },
-  };
-  UI_addChildButton(hotbarContainer, &buttonInfo);
   return RESULT_SUCCESS;
 }
 
-void _App_cleanupUI(App_t *app) {
+inline void _App_cleanupUI(App_t *app) {
   UI_destroy(&app->_uiRoot);
+}
+
+bool _App_UIprocessEvent(App_t *app, UI_t *ui, Event_t *ev) {
+  for (UI_t *child = ui->children; 
+    child < &ui->children[ui->childCount]; child++) {
+    if (_App_UIprocessEvent(app, child, ev)) {
+      return true;
+    }
+  }
+
+  switch (ui->type) {
+    case UI_EL_TYPE_BUTTON:
+      return UI_buttonProcessEvent(ui, app, ev);
+    default:
+      return false;
+  }
 }
 
 #define MOVEMENT_CUTOFF 0.5f
@@ -1386,12 +1409,18 @@ void _App_update(App_t *app)
   vec2 cPos = {0};
   _App_getMouseScreenNormalizedCentered(app, cPos);
   UI_processMouseInput(&app->_uiRoot, cPos);
+  
+  Event_t ev = {0};
+  while (EventQueue_pop(&app->_evQueue, &ev)) {
+    _App_UIprocessEvent(app, &app->_uiRoot, &ev);
+  }
 }
 
 void App_destroy(App_t *app) {
   DEBUG_ASSERT(app != NULL, "App is set to null on App_destroy");
 
   _App_cleanupUI(app);
+  EventQueue_cleanup(&app->_evQueue);
   _App_cleanupTextRenderer(app);
   _App_OpenGlCleanup(app);
   
@@ -1531,6 +1560,7 @@ Result_t App_create(App_t** p_app, AppInfo_t info) {
     return RESULT_FAIL;
   }
 
+  EventQueue_init(&(*p_app)->_evQueue);
   if (_App_initUI(*p_app) != RESULT_SUCCESS) {
     log_error("Failed to initialize app ui" ENDL);
     return RESULT_FAIL;

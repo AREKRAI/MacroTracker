@@ -42,7 +42,7 @@ typedef struct __UI_t {
   struct __UI_t *children, *parent;
   size_t childCount, childCap;
 
-  UiElType_t _type;
+  UiElType_t type;
   bool hide;
   void *_unique;
 
@@ -132,4 +132,51 @@ typedef struct __UiTextInfo_t {
 void __UI_initText(UI_t *self, UiTextInfo_t *specInfo);
 UI_t *UI_addChildText(UI_t *self, UiTextInfo_t *specInfo);
 
+// TODO: EVENT SYSTEM
+typedef enum __EVENT_TYPE_t {
+  EVENT_TYPE_NONE = 0, // EVIL
+  EVENT_TYPE_CLICK = 1,
+  EVENT_TYPE_CHAR_INPUT = 2,
+  EVENT_TYPE_BUTTON
+} EVENT_TYPE_t;
+
+typedef struct __Event_t {
+  EVENT_TYPE_t type;
+  union {
+    vec2 position;
+    UC_t character;
+    struct {
+      int glfwKey;
+      int glfwAction;
+    };
+  };
+} Event_t;
+
+typedef struct __EventQueue_t {
+  size_t count, cap;
+  Event_t *events;
+} EventQueue_t;
+
+void EventQueue_init(EventQueue_t *self);
+void EventQueue_cleanup(EventQueue_t *self);
+
+void EventQueue_push(EventQueue_t *self, Event_t *ev);
+bool EventQueue_pop(EventQueue_t *self, Event_t *ev);
+
+bool UI_buttonProcessEvent(UI_t *self, void *ctx, Event_t *ev);
+// TODO: INPUT
+// typedef struct __UiInput_t {
+//   UStr_t str;
+// } UiInput_t;
+// 
+// typedef struct __UiInputInfo_t {
+//   const char *str;
+//   vec4 color;
+// 
+//   UiSize_t size;
+//   vec2 position;
+// } UiInputInfo_t;
+// 
+// void __UI_initInput(UI_t *self, UiTextInfo_t *specInfo);
+// UI_t *UI_addChildInput(UI_t *self, UiTextInfo_t *specInfo);
 #endif

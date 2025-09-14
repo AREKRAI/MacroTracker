@@ -68,7 +68,7 @@ Result_t UI_init(UI_t *self, UiInfo_t *info) {
   self->children = malloc(self->childCap);
   self->childCount = 0;
 
-  self->_type = info->type;
+  self->type = info->type;
   self->parent = info->parent;
   self->hide = info->hide;
 
@@ -102,7 +102,7 @@ void UI_destroy(UI_t *self) {
       UI_destroy(child);
   }
 
-  switch (self->_type) {
+  switch (self->type) {
     case UI_EL_TYPE_TEXT:
       UStr_destroy(&((UiText_t *)self->_unique)->str);
     case UI_EL_TYPE_BUTTON:
@@ -229,7 +229,7 @@ void UI_processMouseInput(UI_t* self, vec2 mouseWorldPos) {
 
   bool hovered = UI_isHovered(self, mouseWorldPos);
 
-  switch (self->_type) {
+  switch (self->type) {
     case UI_EL_TYPE_BUTTON: {
       UiButton_t *unique = self->_unique;
 
@@ -280,4 +280,52 @@ UI_t *UI_addChildText(UI_t *self, UiTextInfo_t *specInfo) {
   __UI_initText(child, specInfo);
 
   return child;
+}
+
+void EventQueue_init(EventQueue_t *self) {
+  self->cap = DEFAULT_BUF_CAP;
+  self->count = 0;
+  self->events = malloc(self->cap);
+}
+
+void EventQueue_cleanup(EventQueue_t *self) {
+  free(self->events);
+  self->count = 0;
+  self->cap = 0;
+}
+
+void EventQueue_push(EventQueue_t *self, Event_t *ev) {
+  self->count++;
+  while (self->cap < self->count * sizeof(Event_t)) {
+    self->cap <<= 1;
+  }
+  self->events = realloc(self->events, self->cap);
+
+  memcpy(&self->events[self->count - 1], ev, sizeof(Event_t));
+}
+
+bool EventQueue_pop(EventQueue_t *self, Event_t *ev) {
+  if (self->count == 0) {
+    *ev = (Event_t){0};
+    return false;
+  }
+
+  self->count--;
+  memcpy(ev, &self->events[self->count], sizeof(Event_t));
+  return true;
+}
+
+bool UI_buttonProcessEvent(UI_t *self, void *ctx, Event_t *ev) {
+  if (ev->type != EVENT_TYPE_CLICK)
+    return false;
+  
+  bool hovered = UI_isHovered(self, ev->position);
+
+  if (!hovered)
+    return false;
+  
+  UiButton_t *unique = self->_unique;
+  unique->onClick(ctx, self);
+
+  return true;
 }

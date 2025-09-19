@@ -70,30 +70,71 @@ Result_t UI_init(UI_t *self, UiInfo_t *info) {
 
   self->type = info->type;
   self->parent = info->parent;
-  self->hide = info->hide;
+  self->flags = info->flags;
 
   memcpy(self->_pos, info->position, sizeof(vec2));
   UiSize_copy(&self->_size, &info->size);
   memcpy(self->color, info->color, sizeof(vec4));
   memcpy(self->_color, info->color, sizeof(vec4));
 
+  self->id = info->id;
+
   __UI_updateMatrix(self);
   return EXIT_SUCCESS;
 }
 
 UI_t *UI_addChild(UI_t *self, UiInfo_t *info) {
+  DEBUG_ASSERT(info->id != ROOT_ID, "Child cannot have root id");
+
   self->childCount++;
 
   while (self->childCount * sizeof(UI_t) > self->childCap) {
     self->childCap <<= 1;
   }
+
+  UI_t *oldChildPtr = self->children;
   self->children = realloc(self->children, self->childCap);
+  
+  // IF THE BLOCK IS REALLOCATED THE SECOND LEVEL CHILDREN WILL LOSE REFERENCE TO THEIR PARENTS
+  if (oldChildPtr != self->children) {
+    for (UI_t *first = self->children; first < &self->children[self->childCount]; first++) {
+      for (UI_t *sec = first->children; sec < &first->children[first->childCount]; sec++) {
+        sec->parent = first;
+      }
+    }
+  }
 
   UI_t *child = &self->children[self->childCount - 1];
   info->parent = self;
   UI_init(child, info);
 
   return child;
+}
+
+UI_t *UI_findById(UI_t *root, UiId_t id) {
+  if (id == NO_ID) {
+    return root;
+  }
+
+  if (id == ROOT_ID) {
+    return root;
+  }
+
+  if (id == root->id) {
+    return root;
+  }
+
+  for (UI_t *child = root->children; child < &root->children[root->childCount]; child++) {
+    return UI_findById(child, id);
+  }
+
+  return root;
+}
+
+UiId_t UI_addChildById(UI_t *root, UiInfo_t *info) {
+  UI_t *parent = UI_findById(root, info->parentId);
+  UI_addChild(parent, info);
+  return parent->id;
 }
 
 void UI_destroy(UI_t *self) {
@@ -121,38 +162,24 @@ void UI_destroy(UI_t *self) {
 void __UI_initContainer(UI_t *self, UiContainerInfo_t *specInfo) {
   UiContainer_t *unique = (self->_unique = malloc(sizeof(UiContainer_t)));
   *unique = (UiContainer_t) {
-    .flags = specInfo->flags
+    ._offsetAccumulation = 0
   };
 }
 
-UI_t *UI_addChildContainer(UI_t *self, UiContainerInfo_t *specInfo) {
-  UiInfo_t genInfo = {
-    .type = UI_EL_TYPE_CONTAINER,
-    .parent = self,
-  };
+UI_t *UI_addChildContainer(UI_t *self, UiInfo_t *info, UiContainerInfo_t *specInfo) {
+  info->type = UI_EL_TYPE_CONTAINER;
+  info->parent = self;
 
-  DEBUG_ASSERT(
-    sizeof(genInfo.color) == sizeof(specInfo->color), 
-    "genInfo.color and specInfo->color must be of same type"
-  );
-  memcpy(genInfo.color, specInfo->color, sizeof(genInfo.color));
-
-  DEBUG_ASSERT(
-    sizeof(genInfo.position) == sizeof(specInfo->position), 
-    "genInfo.position and specInfo->position must be of same type"
-  );
-  memcpy(genInfo.position, specInfo->position, sizeof(genInfo.position));
-
-  DEBUG_ASSERT(
-    sizeof(genInfo.size) == sizeof(specInfo->size), 
-    "genInfo.size and specInfo->size must be of same type"
-  );
-  UiSize_copy(&genInfo.size, &specInfo->size);
-
-  UI_t *child = UI_addChild(self, &genInfo);
+  UI_t *child = UI_addChild(self, info);
   __UI_initContainer(child, specInfo);
 
   return child;
+}
+
+UiId_t UI_addChildContainerById(UI_t *root, UiInfo_t *info, UiContainerInfo_t *specInfo) {
+  UI_t *parent = UI_findById(root, info->parentId);
+  UI_addChildContainer(parent, info, specInfo);
+  return parent->id;
 }
 
 void __UI_initButton(UI_t *self, UiButtonInfo_t *specInfo) {
@@ -168,35 +195,20 @@ void __UI_initButton(UI_t *self, UiButtonInfo_t *specInfo) {
   memcpy(unique->onHoverColor, specInfo->onHoverColor, sizeof(unique->onHoverColor));
 }
 
-UI_t *UI_addChildButton(UI_t *self, UiButtonInfo_t *specInfo) {
-  UiInfo_t genInfo = {
-    .type = UI_EL_TYPE_BUTTON,
-    .hide = false,
-    .parent = self,
-  };
+UI_t *UI_addChildButton(UI_t *self, UiInfo_t *info, UiButtonInfo_t *specInfo) {
+  info->type = UI_EL_TYPE_BUTTON;
+  info->parent = self;
 
-  DEBUG_ASSERT(
-    sizeof(genInfo.color) == sizeof(specInfo->color), 
-    "genInfo.color and specInfo->color must be of same type"
-  );
-  memcpy(genInfo.color, specInfo->color, sizeof(genInfo.color));
-
-  DEBUG_ASSERT(
-    sizeof(genInfo.position) == sizeof(specInfo->position), 
-    "genInfo.position and specInfo->position must be of same type"
-  );
-  memcpy(genInfo.position, specInfo->position, sizeof(genInfo.position));
-
-  DEBUG_ASSERT(
-    sizeof(genInfo.size) == sizeof(specInfo->size), 
-    "genInfo.size and specInfo->size must be of same type"
-  );
-  UiSize_copy(&genInfo.size, &specInfo->size);
-
-  UI_t *child = UI_addChild(self, &genInfo);
+  UI_t *child = UI_addChild(self, info);
   __UI_initButton(child, specInfo);
 
   return child;
+}
+
+UiId_t UI_addChildButtonById(UI_t *root, UiInfo_t *info, UiButtonInfo_t *specInfo) {
+  UI_t *parent = UI_findById(root, info->parentId);
+  UI_addChildButton(parent, info, specInfo);
+  return parent->id;
 }
 
 bool UI_isHovered(UI_t* self, vec2 mouseWorldPos) {
@@ -227,35 +239,21 @@ void __UI_initText(UI_t *self, UiTextInfo_t *specInfo) {
   UStr_init(&unique->str, specInfo->str);
 }
 
-UI_t *UI_addChildText(UI_t *self, UiTextInfo_t *specInfo) {
-  UiInfo_t genInfo = {
-    .type = UI_EL_TYPE_TEXT,
-    .hide = false,
-    .parent = self,
-  };
+UI_t *UI_addChildText(UI_t *self, UiInfo_t *info, UiTextInfo_t *specInfo) {
+  info->type = UI_EL_TYPE_TEXT,
+  info->parent = self;
 
-  DEBUG_ASSERT(
-    sizeof(genInfo.color) == sizeof(specInfo->color), 
-    "genInfo.color and specInfo->color must be of same type"
-  );
-  memcpy(genInfo.color, specInfo->color, sizeof(genInfo.color));
-
-  DEBUG_ASSERT(
-    sizeof(genInfo.position) == sizeof(specInfo->position), 
-    "genInfo.position and specInfo->position must be of same type"
-  );
-  memcpy(genInfo.position, specInfo->position, sizeof(genInfo.position));
-
-  DEBUG_ASSERT(
-    sizeof(genInfo.size) == sizeof(specInfo->size), 
-    "genInfo.size and specInfo->size must be of same type"
-  );
-  UiSize_copy(&genInfo.size, &specInfo->size);
-
-  UI_t *child = UI_addChild(self, &genInfo);
+  UI_t *child = UI_addChild(self, info);
   __UI_initText(child, specInfo);
 
   return child;
+}
+
+
+UiId_t UI_addChildTextById(UI_t *root, UiInfo_t *info, UiTextInfo_t *specInfo) {
+  UI_t *parent = UI_findById(root, info->parentId);
+  UI_addChildText(parent, info, specInfo);
+  return parent->id;
 }
 
 void EventQueue_init(EventQueue_t *self) {
@@ -321,38 +319,24 @@ bool UI_buttonProcessEvent(UI_t *self, void *ctx, Event_t *ev) {
 void __UI_initInput(UI_t *self, UiInputInfo_t *specInfo) {
   UiInput_t *unique = (self->_unique = malloc(sizeof(UiInput_t)));
   UStr_init(&unique->str, specInfo->str);
-  unique->focus = false;
+  self->flags &= ~UI_FLAG_FOCUS;
 }
 
-UI_t *UI_addChildInput(UI_t *self, UiInputInfo_t *specInfo) {
-  UiInfo_t genInfo = {
-    .type = UI_EL_TYPE_INPUT,
-    .hide = false,
-    .parent = self,
-  };
+UI_t *UI_addChildInput(UI_t *self, UiInfo_t *info, UiInputInfo_t *specInfo) {
+  info->type = UI_EL_TYPE_INPUT;
+  info->parent = self;
 
-  DEBUG_ASSERT(
-    sizeof(genInfo.color) == sizeof(specInfo->color), 
-    "genInfo.color and specInfo->color must be of same type"
-  );
-  memcpy(genInfo.color, specInfo->color, sizeof(genInfo.color));
-
-  DEBUG_ASSERT(
-    sizeof(genInfo.position) == sizeof(specInfo->position), 
-    "genInfo.position and specInfo->position must be of same type"
-  );
-  memcpy(genInfo.position, specInfo->position, sizeof(genInfo.position));
-
-  DEBUG_ASSERT(
-    sizeof(genInfo.size) == sizeof(specInfo->size), 
-    "genInfo.size and specInfo->size must be of same type"
-  );
-  UiSize_copy(&genInfo.size, &specInfo->size);
-
-  UI_t *child = UI_addChild(self, &genInfo);
+  UI_t *child = UI_addChild(self, info);
   __UI_initInput(child, specInfo);
 
   return child;
+}
+
+// THIS SHOULD INLINE
+UiId_t UI_addChildInputById(UI_t *root, UiInfo_t *info, UiInputInfo_t *specInfo) {
+  UI_t *parent = UI_findById(root, info->parentId);
+  UI_addChildInput(parent, info, specInfo);
+  return parent->id;
 }
 
 bool UI_inputProcessEvent(UI_t *self, Event_t *ev) {
@@ -363,24 +347,26 @@ bool UI_inputProcessEvent(UI_t *self, Event_t *ev) {
   switch(ev->type) {
     case EVENT_TYPE_CLICK: {
       if (!hovered) {
-        if (unique->focus) {
-          unique->focus = false;
+        if (self->flags & UI_FLAG_FOCUS) {
+          self->flags &= ~UI_FLAG_FOCUS;
+          self->_color[0] = 0.f;
         }
         return false;
       }
 
-      unique->focus = true;
+      self->flags |= UI_FLAG_FOCUS;
+      self->_color[0] = 1.f;
       return true;
     }
     case EVENT_TYPE_CHAR_INPUT: {
-      if (!unique->focus)
+      if (!(self->flags & UI_FLAG_FOCUS))
         return false;
 
       UStr_pushUC(&unique->str, ev->character);
       return true;
     }
     case EVENT_TYPE_KEY: {
-      if (!unique->focus)
+      if (!(self->flags & UI_FLAG_FOCUS))
         return false;
 
       if (ev->glfwAction != GLFW_REPEAT && ev->glfwAction != GLFW_PRESS)

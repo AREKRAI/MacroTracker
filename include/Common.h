@@ -55,10 +55,11 @@ typedef enum _Result {
 #define COLOR_TRANSPARENT { 0.f, 0.f, 0.f, 0.f }
 #define COLOR_BLACK       { 0.f, 0.f, 0.f, 1.f }
 
-#define HEX_TO_FLOAT(x)   { (x >> 24) / 256.f, ((x << 8) >> 24) / 256.f, ((x << 16) >> 24) / 256.f, ((x << 24) >> 24) }
+#define HEX_TO_FLOAT(x)   { (x >> 24) / 256.f, ((x << 8) >> 24) / 256.f, ((x << 16) >> 24) / 256.f, ((x << 24) >> 24) / 256.f }
+#define RGB_HEX_TO_FLOAT(x) HEX_TO_FLOAT(x ## FF)
 
-#define COLOR_BASE      HEX_TO_FLOAT(0x93CEE1FF) 
-#define COLOR_PRIMARY   HEX_TO_FLOAT(0xE193CEFF) 
-#define COLOR_SECONDARY HEX_TO_FLOAT(0xCEE193FF)
+#define COLOR_BASE      RGB_HEX_TO_FLOAT(0x93CEE1)
+#define COLOR_PRIMARY   RGB_HEX_TO_FLOAT(0xE193CE)
+#define COLOR_SECONDARY RGB_HEX_TO_FLOAT(0xCEE193)
 
 #endif

@@ -73,11 +73,11 @@ typedef struct __Glyph_t {
   UC_t character;
   vec2 size;
   vec2 bearing;
+  vec2 advance;
 
   bool isWhitespace;
 
   GLuint glTextureHandle;
-  u32vec2 advance;
 } _Glyph_t;
 
 typedef union _SizeVec2_t {
@@ -767,16 +767,16 @@ skip_glyph_texture_creation:
       .glTextureHandle = texture,
       .isWhitespace = app->_draw._ftFace->glyph->bitmap.buffer == NULL,
       .size = { 
-        app->_draw._ftFace->glyph->bitmap.width, 
-        app->_draw._ftFace->glyph->bitmap.rows 
+        app->_draw._ftFace->glyph->bitmap.width / (float)FONT_SIZE,
+        app->_draw._ftFace->glyph->bitmap.rows / (float)FONT_SIZE
       },
       .bearing = { 
-        app->_draw._ftFace->glyph->bitmap_left, 
-        app->_draw._ftFace->glyph->bitmap_top 
+        app->_draw._ftFace->glyph->bitmap_left / (float)FONT_SIZE,
+        app->_draw._ftFace->glyph->bitmap_top / (float)FONT_SIZE
       },
       .advance = { 
-        (uint32_t)app->_draw._ftFace->glyph->advance.x,
-        (uint32_t)app->_draw._ftFace->glyph->advance.y 
+        (uint32_t)(app->_draw._ftFace->glyph->advance.x >> 6) / (float)FONT_SIZE,
+        (uint32_t)(app->_draw._ftFace->glyph->advance.y >> 6) / (float)FONT_SIZE
       }
     };
 
@@ -864,8 +864,8 @@ typedef struct __TextInfo_t {
 
 #define TEXT_INFO_INIT (TextInfo_t) { \
   .fontSize = 28,                     \
-  .horSpacing = 0.2f,                 \
-  .vertSpacing = 0.5f,                \
+  .horSpacing = 0.f,                 \
+  .vertSpacing = 0.f,                \
   }
 
 void _App_wndCharCBCK(GLFWwindow* window, unsigned int character) {
@@ -904,14 +904,10 @@ void _Draw_text(App_t *app, UStr_t *str,
 
   for (UC_t *code_point = str->str; code_point < &str->str[str->count + 1]; code_point++) {
       _Glyph_t *glyph = _Draw_getGlyphOrLoad(app, *code_point);
-      lPos[0] += ((glyph->advance[0] >> 6) / 2.f + info.horSpacing) * scaleX;
+      lPos[0] += (glyph->advance[0] / 2.f) * scaleX;
 
       if (glyph->isWhitespace || *code_point == '\n')
         goto skip_glyph_rendering;
-
-      vec3 glyphPosition = {
-        0.f
-      };
 
       Transform_t trans = {
         .rotation = transform.rotation,
@@ -935,7 +931,7 @@ void _Draw_text(App_t *app, UStr_t *str,
       glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
       
 skip_glyph_rendering:
-      lPos[0] += ((glyph->advance[0] >> 6) / 2.f) * scaleX;
+      lPos[0] += (glyph->advance[0] / 2.f + info.horSpacing) * scaleX;
       
       peakYAdvance = glyph->advance[1] > peakYAdvance ?
         glyph->advance[1] : peakYAdvance;
@@ -943,9 +939,7 @@ skip_glyph_rendering:
       peakYBearing = glyph->bearing[1] > peakYBearing ?
         glyph->bearing[1] : peakYBearing;
       if (*code_point == '\n') {
-        lPos[1] -= ((peakYAdvance >> 6) + peakYBearing + info.vertSpacing) * scaleY;
-        lPos[1] -= scaleY * info.vertSpacing;
-
+        lPos[1] -= (peakYAdvance + peakYBearing + info.vertSpacing) * scaleY;
         lPos[0] = transform.position[0];
       }
   }
@@ -956,28 +950,16 @@ void _Draw_calculateUiTextSize(App_t* app, UI_t *ui, vec2 out) {
 
   out[0] = 0;
   out[1] = 0;
-
-  int wwidth = 0, wheight = 0;
-  glfwGetFramebufferSize(app->_wnd, &wwidth, &wheight);
   // TODO: add font size to the text struct
-  const float normalizationFactor = 14 / 
-    ((float)FONT_SIZE * wheight);
-  // DOESN'T TAKE X/Y SPACING INTO ACCOUNT
-  const float scaleX = normalizationFactor;
-  const float scaleY = normalizationFactor;
 
   uint32_t peakYAdvance = 0;
   float peakYBearing = 0;
 
   for (UC_t *code_point = text->str.str; code_point < &text->str.str[text->str.count + 1]; code_point++) {
     _Glyph_t *glyph = _Draw_getGlyphOrLoad(app, *code_point);
-    out[0] += ((glyph->advance[0] >> 6) / 2.f) * scaleX;
+    out[0] += glyph->advance[0] / 2.f;
 
-    vec3 glyphPosition = {
-      0.f
-    };
-
-    out[0] += ((glyph->advance[0] >> 6) / 2.f) * scaleX;
+    out[0] += glyph->advance[0] / 2.f;
     
     peakYAdvance = glyph->advance[1] > peakYAdvance ?
       glyph->advance[1] : peakYAdvance;
@@ -985,15 +967,14 @@ void _Draw_calculateUiTextSize(App_t* app, UI_t *ui, vec2 out) {
     peakYBearing = glyph->bearing[1] > peakYBearing ?
       glyph->bearing[1] : peakYBearing;
     if (*code_point == '\n') {
-      out[1] -= ((peakYAdvance >> 6) + peakYBearing) * scaleY;
-
+      out[1] -= (peakYAdvance  + peakYBearing);
       out[0] = 0;
     }
   }
 
 }
 
-void _Draw_UiText(App_t* app, UI_t *ui) {
+void _Draw_uiText(App_t* app, UI_t *ui) {
   UiText_t *text = ui->_unique;
 
   glUseProgram(app->_draw._texShader);
@@ -1005,44 +986,36 @@ void _Draw_UiText(App_t* app, UI_t *ui) {
     .model = GLM_MAT4_IDENTITY_INIT
   };
 
-  vec2 halfSize = {0};
-  _Draw_calculateUiTextSize(app, ui, halfSize);
-  glm_vec2_scale(halfSize, 0.5f, halfSize);
+  vec2 resultingSize = {0};
+  _Draw_calculateUiTextSize(app, ui, resultingSize);
+
+  vec2 normalizedScale = {0};
+  glm_vec2_div(ui->parent->_size.dimentions, resultingSize, normalizedScale);
+  if (resultingSize[1] < 0.001f)
+    normalizedScale[1] = 1.f;
 
   vec2 lPos = {0};
-
-  int wwidth = 0, wheight = 0;
-  glfwGetFramebufferSize(app->_wnd, &wwidth, &wheight);
-  // TODO: add font size to the text struct
-  const float normalizationFactor = 14 / 
-    ((float)FONT_SIZE * wheight);
-  // DOESN'T TAKE X/Y SPACING INTO ACCOUNT
-  const float scaleX = normalizationFactor;
-  const float scaleY = normalizationFactor;
 
   uint32_t peakYAdvance = 0;
   float peakYBearing = 0;
 
   for (UC_t *code_point = text->str.str; code_point < &text->str.str[text->str.count + 1]; code_point++) {
       _Glyph_t *glyph = _Draw_getGlyphOrLoad(app, *code_point);
-      lPos[0] += ((glyph->advance[0] >> 6) / 2.f) * scaleX;
+      lPos[0] += glyph->advance[0] / 2.f * normalizedScale[0];
 
       if (glyph->isWhitespace || *code_point == '\n')
         goto skip_ui_glyph_rendering;
 
-      vec3 glyphPosition = {
-        0.f
-      };
-
       mat4 modelMatrix = GLM_MAT4_IDENTITY_INIT;
       glm_translate(modelMatrix, (vec3) {
-        lPos[0] + glyph->bearing[0] * scaleX - halfSize[0],
-        lPos[1] - (glyph->size[1] / 2.f - glyph->bearing[1]) * scaleY - halfSize[1],
+        lPos[0] + glyph->bearing[0] * normalizedScale[0] - 0.5,
+        lPos[1] - (glyph->size[1] / 2.f - glyph->bearing[1]) * normalizedScale[0],
         0.f
       });
+
       glm_scale(modelMatrix, (vec3) {
-        glyph->size[0] * scaleX,
-        glyph->size[1] * scaleY
+        glyph->size[0]  * normalizedScale[0],
+        glyph->size[1] * normalizedScale[1]
       });
 
       _LocalUBData2D_t ubData = {0};
@@ -1057,7 +1030,7 @@ void _Draw_UiText(App_t* app, UI_t *ui) {
       glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
       
 skip_ui_glyph_rendering:
-      lPos[0] += ((glyph->advance[0] >> 6) / 2.f) * scaleX;
+      lPos[0] += (glyph->advance[0] / 2.f) * normalizedScale[0];
       
       peakYAdvance = glyph->advance[1] > peakYAdvance ?
         glyph->advance[1] : peakYAdvance;
@@ -1065,46 +1038,57 @@ skip_ui_glyph_rendering:
       peakYBearing = glyph->bearing[1] > peakYBearing ?
         glyph->bearing[1] : peakYBearing;
       if (*code_point == '\n') {
-        lPos[1] -= ((peakYAdvance >> 6) + peakYBearing) * scaleY;
-
+        lPos[1] -= (peakYAdvance + peakYBearing) * normalizedScale[1];
         lPos[0] = 0;
     }
   }
 }
 
+void _Draw_uiContainer(App_t* app, UI_t *ui) {
+  glm_mat4_copy(app->_draw._projection, app->_draw._globalUBData.projectionView);
+  glNamedBufferSubData(app->_draw._globalUB, 0,
+    sizeof(_GlobalUBData_t), &app->_draw._globalUBData
+  );
+
+  _LocalUBData2D_t ubData = {0};
+  glm_mat4_copy(ui->_matrix, ubData.model);
+  glm_vec4_copy(ui->_color, ubData.color);
+
+  glNamedBufferSubData(app->_draw._localUB, 0,
+    sizeof(_LocalUBData2D_t), &ubData
+  );
+
+  glUseProgram(app->_draw._flatShader);
+  glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->_draw._globalUB); 
+  glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->_draw._localUB);
+  glBindVertexArray(app->_draw._quadVAO);
+  glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+}
+
+void _Draw_uiWireframe(App_t* app, UI_t *ui) {
+  glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+  _Draw_uiContainer(app, ui);
+  glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+}
+
 void _Draw_UI(App_t* app, UI_t *ui) {
-  if (ui->hide)
-    goto skip_ui_render;
+  if (ui->flags & UI_FLAG_WIREFRAME)
+    _Draw_uiWireframe(app, ui);
+  // HIDE CHILDREN TOO
+  if (ui->flags & UI_FLAG_HIDE)
+    return;
 
   switch (ui->type) {
     case UI_EL_TYPE_INPUT:
     case UI_EL_TYPE_TEXT: {
-      _Draw_UiText(app, ui);
+      _Draw_uiText(app, ui);
       break;
     }
     default:
-      glm_mat4_copy(app->_draw._projection, app->_draw._globalUBData.projectionView);
-      glNamedBufferSubData(app->_draw._globalUB, 0,
-        sizeof(_GlobalUBData_t), &app->_draw._globalUBData
-      );
-
-      _LocalUBData2D_t ubData = {0};
-      glm_mat4_copy(ui->_matrix, ubData.model);
-      glm_vec4_copy(ui->_color, ubData.color);
-
-      glNamedBufferSubData(app->_draw._localUB, 0,
-        sizeof(_LocalUBData2D_t), &ubData
-      );
-
-      glUseProgram(app->_draw._flatShader);
-      glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->_draw._globalUB); 
-      glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->_draw._localUB);
-      glBindVertexArray(app->_draw._quadVAO);
-      glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+      _Draw_uiContainer(app, ui);
       break;
   }
 
-skip_ui_render:
   for (UI_t *child = ui->children;
     child < &ui->children[ui->childCount]; child++) {
     _Draw_UI(app, child);
@@ -1192,11 +1176,11 @@ void _App_render(App_t *app) {
   _Draw_text(app, &str, (Transform_t) {
       .position = {-0.5, -0.5},
       .rotation = 0.f,
-      .scale = { 1.f, 1.f }
+      .scale = { 100.f, 100.f }
     },
     (TextInfo_t) {
       .fontSize = 100,
-      .horSpacing = 10.f,
+      .horSpacing = 0.25f,
       .vertSpacing = 1.f
     }
   );
@@ -1208,7 +1192,7 @@ void _App_render(App_t *app) {
     (Transform_t) {
       .position = {0.5, 0.5},
       .rotation = -15.f,
-      .scale = { 10.f, 1.f }
+      .scale = { 100.f, 100.f }
     },
     TEXT_INFO_INIT
   );
@@ -1219,7 +1203,7 @@ void _App_render(App_t *app) {
     (Transform_t) {
       .position = {-0.5, -0.5},
       .rotation = 90.f,
-      .scale = { 2.f, 2.f }
+      .scale = { 20.f, 20.f }
     },
     TEXT_INFO_INIT
   );
@@ -1228,7 +1212,7 @@ void _App_render(App_t *app) {
     (Transform_t) {
       .position = {0.f, 0.f},
       .rotation = 0.f,
-      .scale = { 10.f, 10.f }
+      .scale = { 100.f, 100.f }
     },
     TEXT_INFO_INIT
   );
@@ -1242,11 +1226,11 @@ void _App_render(App_t *app) {
   _Draw_text(app, &str, (Transform_t) {
       .position = {0.5, 0.5},
       .rotation = 0.f,
-      .scale = { 1.f, 1.f }
+      .scale = { 50.f, 50.f }
     },
     (TextInfo_t) {
       .fontSize = 100,
-      .horSpacing = 10.f,
+      .horSpacing = 0.1f,
       .vertSpacing = 1.f
     }
   );
@@ -1266,7 +1250,7 @@ void __testButtonCallback(App_t  *app, UI_t *self) {
 Result_t _App_initUI(App_t *app) {
   UiInfo_t info = {
     .color = COLOR_TRANSPARENT,
-    .hide = false,
+    .flags = UI_FLAG_NONE,
     .parent = NULL,
     .position = {0.f, 0.f},
     .size = (UiSize_t) {
@@ -1274,75 +1258,101 @@ Result_t _App_initUI(App_t *app) {
       .width = 2.0,
       .height = 2.0f
     },
-    .type = UI_EL_TYPE_CONTAINER
+    .type = UI_EL_TYPE_CONTAINER,
+    .id = ROOT_ID
   };
 
   UI_init(&app->_uiRoot, &info);
 
-  UiContainerInfo_t containerInfo = {
+  UiContainerInfo_t containerInfo = {0}; // BULLSHIT FOR NOW
+  __UI_initContainer(&app->_uiRoot, &containerInfo);
+
+  info = (UiInfo_t) {
+    .flags = UI_FLAG_ORDER_VERTICAL,
     .color = COLOR_BASE,
     .size = (UiSize_t) {
       .flag = UI_SIZE_FLAG_FILL_WIDTH,
       .width = 1.0,
       .height = 0.5f
     },
-    .position = {0, -0.75f},
-    .flags = CONTAINER_FLAG_ORDER_VERTICAL
+    .position = {0.f, -0.75f},
+    .id = 1,
+    .parentId = 0
   };
-
-  __UI_initContainer(&app->_uiRoot, &containerInfo);
-  UI_t *hotbarContainer = UI_addChildContainer(&app->_uiRoot, &containerInfo);
+  UI_addChildContainerById(&app->_uiRoot, &info, &containerInfo);
 
   UiInputInfo_t inputInfo = {
+    .str = "Default Input"
+  };
+
+  info = (UiInfo_t) {
+    .flags = UI_FLAG_WIREFRAME,
     .color = COLOR_SECONDARY,
     .size = (UiSize_t) {
       .flag = UI_SIZE_FLAG_REAL,
-      .width = 5.0f,
-      .height = 5.0f
+      .width = 1.0f,
+      .height = 1.0f
     },
-    .position = { 0.5, 0.5 },
-    .str = "Default Input"
+    .position = {0.5f, 0.5f},
+    .id = 2,
+    .parentId = 1
   };
-  UI_addChildInput(hotbarContainer, &inputInfo);
+  UI_addChildInputById(&app->_uiRoot, &info, &inputInfo);
 
   UiButtonInfo_t buttonInfo = {
-    .color = COLOR_PRIMARY,
     .onHoverColor = COLOR_SECONDARY,
     .onClick = __testButtonCallback,
-    .position = {0.5f, 0},
+  };
+
+  info = (UiInfo_t) {
+    .flags = UI_FLAG_NONE,
+    .color = COLOR_SECONDARY,
     .size = (UiSize_t) {
       .flag = UI_SIZE_FLAG_REAL,
       .width = 0.5f,
       .height = 0.25f
     },
+    .position = {0.f, 0.5f},
+    .id = 3,
+    .parentId = 1
   };
-
-  UI_addChildButton(hotbarContainer, &buttonInfo);
+  UI_addChildButtonById(&app->_uiRoot, &info, &buttonInfo);
   
   buttonInfo = (UiButtonInfo_t) {
-    .color = COLOR_PRIMARY,
     .onHoverColor = COLOR_SECONDARY,
     .onClick = __testButtonCallback,
-    .position = {0, 0},
+  };
+
+  info = (UiInfo_t) {
+    .flags = UI_FLAG_NONE,
+    .color = COLOR_PRIMARY,
     .size = (UiSize_t) {
       .flag = UI_SIZE_FLAG_REAL,
       .width = 1.0,
       .height = 0.4f
     },
+    .position = {0.f, 0.f},
+    .id = 4,
+    .parentId = 1
   };
-  UI_t *bigButton = UI_addChildButton(hotbarContainer, &buttonInfo);
 
   UiTextInfo_t textInfo = {
-    .color = COLOR_BLACK,
-    .position = {0},
-    .size = (UiSize_t) {
-      .flag = UI_SIZE_FLAG_REAL,
-      .width = 5.f,
-      .height = 5.f
-    },
     .str = "Add Macro"
   };
-  UI_addChildText(bigButton, &textInfo);
+
+  info = (UiInfo_t) {
+    .flags = UI_FLAG_WIREFRAME,
+    .color = COLOR_BLACK,
+    .size = (UiSize_t) {
+      .flag = UI_SIZE_FLAG_REAL | UI_SIZE_FLAG_FILL_HEIGHT | UI_SIZE_FLAG_FILL_WIDTH,
+      .width = 1.f,
+      .height = 1.f
+    },
+    .position = {0.f, 0.f},
+    .id = 5,
+    .parentId = 4
+  };
+  UI_addChildTextById(&app->_uiRoot, &info, &textInfo);
   return RESULT_SUCCESS;
 }
 

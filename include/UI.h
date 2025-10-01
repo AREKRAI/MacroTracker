@@ -19,13 +19,13 @@ typedef enum __UiFlag_t {
   UI_FLAG_HIDE = 1,
   UI_FLAG_WIREFRAME = 2,
   UI_FLAG_FOCUS = 4,
-  UI_FLAG_ORDER_VERTICAL = 8,
+  UI_FLAG_ORDER_VERTICAL = 8, // UNIMPLEMENTED
   UI_FLAG_ORDER_HORIZONTAL = 16
 } UiFlag_t;
 
 // TODO: GET BACK TO IDS
 typedef uint32_t UiId_t;
-#define NO_ID (-1)
+#define NO_ID -1
 #define ROOT_ID 0
 
 #define DEFAULT_CHILD_CAP (1 << 8)
@@ -41,7 +41,8 @@ typedef enum __UI_SIZE_FLAG_T {
   UI_SIZE_FLAG_FILL_WIDTH = 1, // NOT SUPPORTED
   UI_SIZE_FLAG_FILL_HEIGHT = 2, // NOT SUPPORTED
   UI_SIZE_FLAG_FLEX_WIDTH = 4,
-  UI_SIZE_FLAG_FLEX_HEIGHT = 8
+  UI_SIZE_FLAG_FLEX_HEIGHT = 8,
+  UI_SIZE_FLAG_DISABLE_ASPECT_CONSTANT = 16
 } UI_SIZE_FLAG_T;
 
 typedef struct __UiSize_t {
@@ -65,7 +66,7 @@ typedef struct __UI_t {
   UiFlag_t flags;
   void *_unique;
 
-  UiSize_t _size;
+  UiSize_t size;
   vec2 _pos, _globalPos;
 
   vec4 color;
@@ -98,7 +99,8 @@ UI_t *UI_addChild(UI_t *self, UiInfo_t *info);
 void UI_destroy(UI_t *self);
 
 // RETURNS: PARENT ID (0 = ROOT if parentId is not found in the tree or if )
-UiId_t UI_addChildById(UI_t *root, UiInfo_t *info);
+UI_t *UI_addChildById(UI_t *root, UiInfo_t *info);
+// !!! CURRENTLY BROKEN
 UI_t *UI_findById(UI_t *root, UiId_t id);
 
 typedef struct __UiContainer_t {
@@ -111,7 +113,7 @@ typedef struct __UiContainerInfo_t {
 
 void __UI_initContainer(UI_t *self, UiContainerInfo_t *specInfo);
 UI_t *UI_addChildContainer(UI_t *self, UiInfo_t *info, UiContainerInfo_t *specInfo);
-UiId_t UI_addChildContainerById(UI_t *self, UiInfo_t *info, UiContainerInfo_t *specInfo);
+UI_t *UI_addChildContainerById(UI_t *self, UiInfo_t *info, UiContainerInfo_t *specInfo);
 
 typedef void(*UiCBCK_t)(void *, UI_t *);
 
@@ -127,7 +129,7 @@ typedef struct __UiButtonInfo_t {
 
 void __UI_initButton(UI_t *self, UiButtonInfo_t *specInfo);
 UI_t *UI_addChildButton(UI_t *self, UiInfo_t *info, UiButtonInfo_t *specInfo);
-UiId_t UI_addChildButtonById(UI_t *root, UiInfo_t *info, UiButtonInfo_t *specInfo);
+UI_t *UI_addChildButtonById(UI_t *root, UiInfo_t *info, UiButtonInfo_t *specInfo);
 bool UI_isHovered(UI_t* self, vec2 mouseWorldPos);
 
 // TODO: get text and input to have an actual size in the rendering front end
@@ -142,45 +144,9 @@ typedef struct __UiTextInfo_t {
 
 void __UI_initText(UI_t *self, UiTextInfo_t *specInfo);
 UI_t *UI_addChildText(UI_t *self, UiInfo_t *info, UiTextInfo_t *specInfo);
-UiId_t UI_addChildTextById(UI_t *root, UiInfo_t *info, UiTextInfo_t *specInfo);
+UI_t *UI_addChildTextById(UI_t *root, UiInfo_t *info, UiTextInfo_t *specInfo);
 
-// REMOVE THIS IN THE FUTURE
-// BY COPYING THE GLFW KEY MAPPING AND RENAMING IT
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
-
-// TODO: EVENT SYSTEM
-typedef enum __EVENT_TYPE_t {
-  EVENT_TYPE_NONE = 0, // EVIL
-  EVENT_TYPE_CLICK = 1,
-  EVENT_TYPE_CHAR_INPUT = 2,
-  EVENT_TYPE_MOUSE_MOVE = 3,
-  EVENT_TYPE_FOCUS_SET = 4,
-  EVENT_TYPE_KEY
-} EVENT_TYPE_t;
-
-typedef struct __Event_t {
-  EVENT_TYPE_t type;
-  union {
-    vec2 position;
-    UC_t character;
-    struct {
-      int glfwKey;
-      int glfwAction;
-    };
-  };
-} Event_t;
-
-typedef struct __EventQueue_t {
-  size_t count, cap;
-  Event_t *events;
-} EventQueue_t;
-
-void EventQueue_init(EventQueue_t *self);
-void EventQueue_cleanup(EventQueue_t *self);
-
-void EventQueue_push(EventQueue_t *self, Event_t *ev);
-bool EventQueue_pop(EventQueue_t *self, Event_t *ev);
+#include "Event.h"
 
 // RETURNS: EVENT ABSORBED
 bool UI_buttonProcessEvent(UI_t *self, void *ctx, Event_t *ev);
@@ -195,7 +161,7 @@ typedef struct __UiInputInfo_t {
 
 void __UI_initInput(UI_t *self, UiInputInfo_t *specInfo);
 UI_t *UI_addChildInput(UI_t *self, UiInfo_t *info, UiInputInfo_t *specInfo);
-UiId_t UI_addChildInputById(UI_t *root, UiInfo_t *info, UiInputInfo_t *specInfo);
+UI_t *UI_addChildInputById(UI_t *root, UiInfo_t *info, UiInputInfo_t *specInfo);
 bool UI_inputProcessEvent(UI_t *self, Event_t *ev);
 
 #endif

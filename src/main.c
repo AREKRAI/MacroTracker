@@ -5,6 +5,9 @@
 #include <stdbool.h>
 #include <assert.h>
 
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <glad/gl.h>
@@ -24,73 +27,7 @@
 #include "Common.h"
 #include "UStr.h"
 #include "UI.h"
-
-typedef struct __GlobalUBData_t {
-  mat4 projectionView;
-} _GlobalUBData_t;
-
-typedef struct __Transform_t {
-  vec2 position;
-  vec2 scale;
-  float rotation;
-} Transform_t;
-
-#define TRANSFORM_INIT (Transform_t) {   \
-    .position = { 0.f, 0.f },            \
-    .scale = {1.f, 1.f},                 \
-    .rotation = 0.f                      \
-  }
-
-void Transform_toMat4(Transform_t *self, mat4 matrix) {
-  glm_mat4_identity(matrix);
-
-  glm_rotate(
-    matrix, 
-    (self->rotation / 180.f)* GLM_PI, 
-    (vec3){0, 0, 1}
-  );
-
-  glm_translate(matrix, self->position);
-
-  glm_scale(matrix, self->scale);
-
-}
-
-void Transform_copy(Transform_t *self, Transform_t other) {
-  memcpy(self->position, other.position, sizeof(vec2));
-  memcpy(self->scale, other.scale, sizeof(vec2));
-  memcpy(&self->rotation, &other.rotation, sizeof(float));
-}
-
-typedef struct __LocalUBData2D_t {
-  mat4 model;
-  vec4 color;
-} _LocalUBData2D_t;
-
-typedef uint32_t u32vec2[2];
-
-typedef struct __Glyph_t {
-  UC_t character;
-  vec2 size;
-  vec2 bearing;
-  vec2 advance;
-
-  bool isWhitespace;
-
-  GLuint glTextureHandle;
-} _Glyph_t;
-
-typedef union _SizeVec2_t {
-  struct {
-    size_t x, y;
-  };
-
-  struct {
-    size_t width, height;
-  };
-
-  size_t ptr[2];
-} SizeVec2_t;
+#include "Draw.h"
 
 typedef struct __AppInfo_t {
   const char *name;
@@ -107,26 +44,10 @@ typedef struct __AppInfo_t {
   }
 
 typedef struct __App_t {
-  struct __Draw_t {
-    FT_Library _ft;
-    FT_Face _ftFace;
-
-    // TODO: implement flatShader
-    GLuint _texShader, _flatShader;
-    GLuint _quadVAO, _quadVBO, _quadEBO;
-
-    mat4 _projection, _view;
-
-    GLuint _globalUB, _localUB;
-    _GlobalUBData_t _globalUBData;
-
-    // Currently linear search
-    _Glyph_t *_glyphs;
-    size_t _glyphCap, _glyphCount;
-  } _draw;
-
   GLFWwindow *_wnd;
   bool _running;
+
+  Draw_t draw;
 
   double _lastTime;
   double _deltaTime;
@@ -143,11 +64,29 @@ typedef struct __App_t {
   EventQueue_t _evQueue;
   UI_t _uiRoot;
 
+  HANDLE _renderThread;
   AppInfo_t info;
 } App_t;
 
 #define FPS_LIMIT 144
 #define FRAME_TIME (1.0 / FPS_LIMIT)
+
+bool Draw_frameTimeElapsed(struct __Draw_t *draw) {
+  double newTime = glfwGetTime();
+  double delta = newTime - draw->_lastTime;
+  if (delta < FRAME_TIME) {
+    return false;
+  }
+
+  draw->_deltaTime = delta;
+  draw->_lastTime = newTime;
+  return true;
+}
+
+void Draw_timeInit(struct __Draw_t *draw) {
+  draw->_lastTime = glfwGetTime();
+  draw->_deltaTime = 0.0;
+}
 
 bool __App_frameTimeElapsed(App_t *app) {
   double newTime = glfwGetTime();
@@ -215,7 +154,7 @@ inline void _App_getMouseWorldPosition(App_t *app, vec2 result) {
   screenPosition[0] *= aspect;
 
   mat4 camInv = GLM_MAT4_IDENTITY_INIT;
-  glm_mat4_inv(app->_draw._view, camInv);
+  glm_mat4_inv(app->draw._view, camInv);
 
   vec3 cursorPos = {0, 0, 0};
   glm_mat4_mulv3(
@@ -271,6 +210,7 @@ void _App_wndMouseBtnCBCK(GLFWwindow* window, int button, int action, int mods) 
     return;
 
   Event_t payload = {
+    .category = EVENT_CAT_INPUT,
     .type = EVENT_TYPE_CLICK,
     .position = {0}
   };
@@ -284,7 +224,9 @@ void _App_wndInputCBCK(GLFWwindow* window,
   App_t *app = glfwGetWindowUserPointer(window);
 
   Event_t payload = {
+    .category = EVENT_CAT_INPUT,
     .type = EVENT_TYPE_KEY,
+
     .glfwAction = action,
     .glfwKey = key
   };
@@ -443,15 +385,15 @@ Result_t _OpenGL_validateAndLogError(GLuint shader, const char *shaderFileName,
 #endif
 
 void _App_OpenGlCleanup(App_t *app) {
-  glDeleteProgram(app->_draw._texShader);
-  glDeleteProgram(app->_draw._flatShader);
+  glDeleteProgram(app->draw._texShader);
+  glDeleteProgram(app->draw._flatShader);
 
-  glDeleteBuffers(1, &app->_draw._quadEBO);
-  glDeleteBuffers(1, &app->_draw._quadVBO);
+  glDeleteBuffers(1, &app->draw._quadEBO);
+  glDeleteBuffers(1, &app->draw._quadVBO);
 
-  glDeleteVertexArrays(1, &app->_draw._quadVAO);
+  glDeleteVertexArrays(1, &app->draw._quadVAO);
 
-  glDeleteBuffers(1, &app->_draw._globalUB);
+  glDeleteBuffers(1, &app->draw._globalUB);
 }
 
 typedef struct _Vertex2D_t {
@@ -641,53 +583,53 @@ Result_t _App_initOpenGL(App_t *app) {
       2, 3, 0    // second triangle
   };
 
-  glCreateVertexArrays(1, &app->_draw._quadVAO);
+  glCreateVertexArrays(1, &app->draw._quadVAO);
   
-  glCreateBuffers(1, &app->_draw._quadVBO);
-  glNamedBufferData(app->_draw._quadVBO, sizeof(vertices),
+  glCreateBuffers(1, &app->draw._quadVBO);
+  glNamedBufferData(app->draw._quadVBO, sizeof(vertices),
     vertices, GL_STATIC_DRAW
   );
-  glVertexArrayVertexBuffer(app->_draw._quadVAO, 0, app->_draw._quadVBO,
+  glVertexArrayVertexBuffer(app->draw._quadVAO, 0, app->draw._quadVBO,
     0, sizeof(Vertex2D_t)
   );
 
-  glCreateBuffers(1, &app->_draw._quadEBO);
-  glNamedBufferData(app->_draw._quadEBO, sizeof(indices),
+  glCreateBuffers(1, &app->draw._quadEBO);
+  glNamedBufferData(app->draw._quadEBO, sizeof(indices),
     indices, GL_STATIC_DRAW
   );
-  glVertexArrayElementBuffer(app->_draw._quadVAO, app->_draw._quadEBO);
+  glVertexArrayElementBuffer(app->draw._quadVAO, app->draw._quadEBO);
 
-  glVertexArrayAttribFormat(app->_draw._quadVAO, 0, 3, GL_FLOAT,
+  glVertexArrayAttribFormat(app->draw._quadVAO, 0, 3, GL_FLOAT,
     GL_FALSE, offsetof(Vertex2D_t, position)
   );
-  glVertexArrayAttribBinding(app->_draw._quadVAO, 0, 0);
-  glEnableVertexArrayAttrib(app->_draw._quadVAO, 0);
+  glVertexArrayAttribBinding(app->draw._quadVAO, 0, 0);
+  glEnableVertexArrayAttrib(app->draw._quadVAO, 0);
 
-  glVertexArrayAttribFormat(app->_draw._quadVAO, 1, 2, GL_FLOAT,
+  glVertexArrayAttribFormat(app->draw._quadVAO, 1, 2, GL_FLOAT,
     GL_FALSE, offsetof(Vertex2D_t, tex)
   );
-  glVertexArrayAttribBinding(app->_draw._quadVAO, 1, 0);
-  glEnableVertexArrayAttrib(app->_draw._quadVAO, 1);
+  glVertexArrayAttribBinding(app->draw._quadVAO, 1, 0);
+  glEnableVertexArrayAttrib(app->draw._quadVAO, 1);
 
   __Draw_loadShaderStringFromFiles(
-    &app->_draw._texShader, 
+    &app->draw._texShader, 
     SHADER_DIR VERT_FILE_NAME, 
     SHADER_DIR FRAG_FILE_NAME
   );
 
   __Draw_loadShaderStringFromFiles(
-    &app->_draw._flatShader,
+    &app->draw._flatShader,
     SHADER_DIR "vert_flat_2d.glsl",
     SHADER_DIR "frag_flat_2d.glsl"
   );
   
-  glCreateBuffers(1, &app->_draw._globalUB);
-  glNamedBufferData(app->_draw._globalUB, sizeof(_GlobalUBData_t),
-    &app->_draw._globalUBData, GL_STATIC_DRAW
+  glCreateBuffers(1, &app->draw._globalUB);
+  glNamedBufferData(app->draw._globalUB, sizeof(_GlobalUBData_t),
+    &app->draw._globalUBData, GL_STATIC_DRAW
   );
 
-  glCreateBuffers(1, &app->_draw._localUB);
-  glNamedBufferData(app->_draw._localUB,
+  glCreateBuffers(1, &app->draw._localUB);
+  glNamedBufferData(app->draw._localUB,
     sizeof(_LocalUBData2D_t), NULL, GL_STATIC_DRAW
   );
 
@@ -700,8 +642,8 @@ Result_t _App_initOpenGL(App_t *app) {
 
 
 _Glyph_t *_Draw_getGlyph(App_t *app, UC_t character) {
-  if (character < app->_draw._glyphCount) {
-    _Glyph_t *sample = &app->_draw._glyphs[character];
+  if (character < app->draw._glyphCount) {
+    _Glyph_t *sample = &app->draw._glyphs[character];
 
     if (sample->character == character) {
       return sample;
@@ -709,8 +651,8 @@ _Glyph_t *_Draw_getGlyph(App_t *app, UC_t character) {
   }
 
   size_t ucharInd = 0;
-  for (;ucharInd < app->_draw._glyphCount; ucharInd++) {
-    _Glyph_t *iglyph = &app->_draw._glyphs[ucharInd];
+  for (;ucharInd < app->draw._glyphCount; ucharInd++) {
+    _Glyph_t *iglyph = &app->draw._glyphs[ucharInd];
     if (iglyph->character == character) {
       return iglyph;
     }
@@ -734,19 +676,19 @@ _Glyph_t *_Draw_getGlyphOrLoad(App_t *app, UC_t character) {
 }
 
 Result_t _Draw_loadGlyph(App_t *app, UC_t character) {
-    if (FT_Load_Char(app->_draw._ftFace, character, FT_LOAD_RENDER)) {
+    if (FT_Load_Char(app->draw._ftFace, character, FT_LOAD_RENDER)) {
       log_warn("Failed to load char %c of font " FONT_PATH ENDL);
       return RESULT_FAIL;
     }
 
     // generate texture
     GLuint texture = 0;
-    if (app->_draw._ftFace->glyph->bitmap.buffer == NULL)
+    if (app->draw._ftFace->glyph->bitmap.buffer == NULL)
       goto skip_glyph_texture_creation;
 
     glCreateTextures(GL_TEXTURE_2D, 1, &texture);
     glTextureStorage2D(texture, 1, GL_R8,
-      app->_draw._ftFace->glyph->bitmap.width, app->_draw._ftFace->glyph->bitmap.rows
+      app->draw._ftFace->glyph->bitmap.width, app->draw._ftFace->glyph->bitmap.rows
     );
 
     // set texture options
@@ -757,39 +699,39 @@ Result_t _Draw_loadGlyph(App_t *app, UC_t character) {
 
     glTextureSubImage2D(texture, 0, 
       0, 0,
-      app->_draw._ftFace->glyph->bitmap.width, app->_draw._ftFace->glyph->bitmap.rows,
-      GL_RED, GL_UNSIGNED_BYTE, app->_draw._ftFace->glyph->bitmap.buffer
+      app->draw._ftFace->glyph->bitmap.width, app->draw._ftFace->glyph->bitmap.rows,
+      GL_RED, GL_UNSIGNED_BYTE, app->draw._ftFace->glyph->bitmap.buffer
     );
 
 skip_glyph_texture_creation:
     _Glyph_t glyph = {
       .character = character,
       .glTextureHandle = texture,
-      .isWhitespace = app->_draw._ftFace->glyph->bitmap.buffer == NULL,
+      .isWhitespace = app->draw._ftFace->glyph->bitmap.buffer == NULL,
       .size = { 
-        app->_draw._ftFace->glyph->bitmap.width / (float)FONT_SIZE,
-        app->_draw._ftFace->glyph->bitmap.rows / (float)FONT_SIZE
+        app->draw._ftFace->glyph->bitmap.width / (float)FONT_SIZE,
+        app->draw._ftFace->glyph->bitmap.rows / (float)FONT_SIZE
       },
       .bearing = { 
-        app->_draw._ftFace->glyph->bitmap_left / (float)FONT_SIZE,
-        app->_draw._ftFace->glyph->bitmap_top / (float)FONT_SIZE
+        app->draw._ftFace->glyph->bitmap_left / (float)FONT_SIZE,
+        app->draw._ftFace->glyph->bitmap_top / (float)FONT_SIZE
       },
       .advance = { 
-        (uint32_t)(app->_draw._ftFace->glyph->advance.x >> 6) / (float)FONT_SIZE,
-        (uint32_t)(app->_draw._ftFace->glyph->advance.y >> 6) / (float)FONT_SIZE
+        (uint32_t)(app->draw._ftFace->glyph->advance.x >> 6) / (float)FONT_SIZE,
+        (uint32_t)(app->draw._ftFace->glyph->advance.y >> 6) / (float)FONT_SIZE
       }
     };
 
-    app->_draw._glyphCount++;
+    app->draw._glyphCount++;
 
-    while (app->_draw._glyphCap < app->_draw._glyphCount * sizeof(_Glyph_t)) {
-      app->_draw._glyphCap <<= 1;
+    while (app->draw._glyphCap < app->draw._glyphCount * sizeof(_Glyph_t)) {
+      app->draw._glyphCap <<= 1;
     }
-    app->_draw._glyphs = realloc(app->_draw._glyphs, app->_draw._glyphCap);
+    app->draw._glyphs = realloc(app->draw._glyphs, app->draw._glyphCap);
 
     size_t ucharInd = 0;
-    for (;ucharInd < app->_draw._glyphCount - 1; ucharInd++) {
-      _Glyph_t *iglyph = &app->_draw._glyphs[ucharInd];
+    for (;ucharInd < app->draw._glyphCount - 1; ucharInd++) {
+      _Glyph_t *iglyph = &app->draw._glyphs[ucharInd];
       if (iglyph->character == character) {
         log_error("Unicode character has already been loaded" ENDL);
         return RESULT_FAIL;
@@ -800,16 +742,16 @@ skip_glyph_texture_creation:
       }
     }
 
-    size_t spaceDiff = app->_draw._glyphCount - ucharInd - 1;
+    size_t spaceDiff = app->draw._glyphCount - ucharInd - 1;
     if (spaceDiff > 0) {
       memcpy(
-        &app->_draw._glyphs[ucharInd + 1],
-        &app->_draw._glyphs[ucharInd],
+        &app->draw._glyphs[ucharInd + 1],
+        &app->draw._glyphs[ucharInd],
         sizeof(_Glyph_t)
       );
     }
 
-    app->_draw._glyphs[ucharInd] = glyph;
+    app->draw._glyphs[ucharInd] = glyph;
 
     return RESULT_SUCCESS;
 }
@@ -817,27 +759,27 @@ skip_glyph_texture_creation:
 #define ASCII_LOAD_LIMIT 128
 
 Result_t _Draw_loadAsciiGlyphs(App_t *app) {
-  if (FT_Init_FreeType(&app->_draw._ft) != 0) {
+  if (FT_Init_FreeType(&app->draw._ft) != 0) {
     log_error("Failed to init/load freetype library" ENDL);
     return RESULT_FAIL;
   }
 
-  if (FT_New_Face(app->_draw._ft, FONT_PATH, 0, &app->_draw._ftFace)) {
+  if (FT_New_Face(app->draw._ft, FONT_PATH, 0, &app->draw._ftFace)) {
     log_error("Failed to load font at: " FONT_PATH ENDL);
     return RESULT_FAIL;
   }
 
-  FT_Set_Pixel_Sizes(app->_draw._ftFace, 0, FONT_SIZE);
+  FT_Set_Pixel_Sizes(app->draw._ftFace, 0, FONT_SIZE);
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
   // TODO:
   // Create texture atlas optimisations
 
-  app->_draw._glyphCount = 0,
-  app->_draw._glyphCap = DEFAULT_BUF_CAP,
-  app->_draw._glyphs = malloc(app->_draw._glyphCap),
+  app->draw._glyphCount = 0,
+  app->draw._glyphCap = DEFAULT_BUF_CAP,
+  app->draw._glyphs = malloc(app->draw._glyphCap),
 
-  memset(app->_draw._glyphs, 0, app->_draw._glyphCap);
+  memset(app->draw._glyphs, 0, app->draw._glyphCap);
   for (UC_t character = 0; character < ASCII_LOAD_LIMIT; character++) {
     _Draw_loadGlyph(app, character);
   }
@@ -846,14 +788,14 @@ Result_t _Draw_loadAsciiGlyphs(App_t *app) {
 }
 
 void _App_cleanupTextRenderer(App_t *app) {
-  FT_Done_Face(app->_draw._ftFace);
-  FT_Done_FreeType(app->_draw._ft);
+  FT_Done_Face(app->draw._ftFace);
+  FT_Done_FreeType(app->draw._ft);
 
-  for (size_t glyphIndex = 0; glyphIndex < app->_draw._glyphCount; glyphIndex++) {
-    _Glyph_t *glyph = &app->_draw._glyphs[glyphIndex];
+  for (size_t glyphIndex = 0; glyphIndex < app->draw._glyphCount; glyphIndex++) {
+    _Glyph_t *glyph = &app->draw._glyphs[glyphIndex];
     glDeleteTextures(1, &glyph->glTextureHandle);
   }
-  free(app->_draw._glyphs);
+  free(app->draw._glyphs);
 }
 
 typedef struct __TextInfo_t {
@@ -873,6 +815,7 @@ void _App_wndCharCBCK(GLFWwindow* window, unsigned int character) {
   UStr_pushUC(&app->input, character);
 
   Event_t payload = {
+    .category = EVENT_CAT_INPUT,
     .type = EVENT_TYPE_CHAR_INPUT,
     .character = character
   };
@@ -881,9 +824,9 @@ void _App_wndCharCBCK(GLFWwindow* window, unsigned int character) {
 
 void _Draw_text(App_t *app, UStr_t *str,
   const Transform_t transform, const TextInfo_t info) {
-  glUseProgram(app->_draw._texShader);
-  glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->_draw._globalUB);
-  glBindVertexArray(app->_draw._quadVAO);
+  glUseProgram(app->draw._texShader);
+  glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->draw._globalUB);
+  glBindVertexArray(app->draw._quadVAO);
 
   _LocalUBData2D_t ubData = {
     .color = COLOR_RED,
@@ -923,10 +866,10 @@ void _Draw_text(App_t *app, UStr_t *str,
 
       Transform_toMat4(&trans, ubData.model);
 
-      glNamedBufferSubData(app->_draw._localUB, 0,
+      glNamedBufferSubData(app->draw._localUB, 0,
         sizeof(_LocalUBData2D_t), &ubData
       );
-      glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->_draw._localUB);
+      glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->draw._localUB);
       glBindTextureUnit(0, glyph->glTextureHandle);
       glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
       
@@ -958,7 +901,6 @@ void _Draw_calculateUiTextSize(App_t* app, UI_t *ui, vec2 out) {
   for (UC_t *code_point = text->str.str; code_point < &text->str.str[text->str.count + 1]; code_point++) {
     _Glyph_t *glyph = _Draw_getGlyphOrLoad(app, *code_point);
     out[0] += glyph->advance[0] / 2.f;
-
     out[0] += glyph->advance[0] / 2.f;
     
     peakYAdvance = glyph->advance[1] > peakYAdvance ?
@@ -971,15 +913,14 @@ void _Draw_calculateUiTextSize(App_t* app, UI_t *ui, vec2 out) {
       out[0] = 0;
     }
   }
-
 }
 
 void _Draw_uiText(App_t* app, UI_t *ui) {
   UiText_t *text = ui->_unique;
 
-  glUseProgram(app->_draw._texShader);
-  glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->_draw._globalUB);
-  glBindVertexArray(app->_draw._quadVAO);
+  glUseProgram(app->draw._texShader);
+  glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->draw._globalUB);
+  glBindVertexArray(app->draw._quadVAO);
 
   _LocalUBData2D_t ubData = {
     .color = COLOR_RED,
@@ -990,7 +931,7 @@ void _Draw_uiText(App_t* app, UI_t *ui) {
   _Draw_calculateUiTextSize(app, ui, resultingSize);
 
   vec2 normalizedScale = {0};
-  glm_vec2_div(ui->parent->_size.dimentions, resultingSize, normalizedScale);
+  glm_vec2_div(ui->parent->size.dimentions, resultingSize, normalizedScale);
   if (resultingSize[1] < 0.001f)
     normalizedScale[1] = 1.f;
 
@@ -1022,10 +963,10 @@ void _Draw_uiText(App_t* app, UI_t *ui) {
       glm_mat4_mul(ui->_matrix, modelMatrix, ubData.model);
       glm_vec4_copy(ui->_color, ubData.color);
 
-      glNamedBufferSubData(app->_draw._localUB, 0,
+      glNamedBufferSubData(app->draw._localUB, 0,
         sizeof(_LocalUBData2D_t), &ubData
       );
-      glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->_draw._localUB);
+      glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->draw._localUB);
       glBindTextureUnit(0, glyph->glTextureHandle);
       glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
       
@@ -1045,23 +986,23 @@ skip_ui_glyph_rendering:
 }
 
 void _Draw_uiContainer(App_t* app, UI_t *ui) {
-  glm_mat4_copy(app->_draw._projection, app->_draw._globalUBData.projectionView);
-  glNamedBufferSubData(app->_draw._globalUB, 0,
-    sizeof(_GlobalUBData_t), &app->_draw._globalUBData
+  glm_mat4_copy(app->draw._projection, app->draw._globalUBData.projectionView);
+  glNamedBufferSubData(app->draw._globalUB, 0,
+    sizeof(_GlobalUBData_t), &app->draw._globalUBData
   );
 
   _LocalUBData2D_t ubData = {0};
   glm_mat4_copy(ui->_matrix, ubData.model);
   glm_vec4_copy(ui->_color, ubData.color);
 
-  glNamedBufferSubData(app->_draw._localUB, 0,
+  glNamedBufferSubData(app->draw._localUB, 0,
     sizeof(_LocalUBData2D_t), &ubData
   );
 
-  glUseProgram(app->_draw._flatShader);
-  glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->_draw._globalUB); 
-  glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->_draw._localUB);
-  glBindVertexArray(app->_draw._quadVAO);
+  glUseProgram(app->draw._flatShader);
+  glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->draw._globalUB); 
+  glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->draw._localUB);
+  glBindVertexArray(app->draw._quadVAO);
   glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 }
 
@@ -1096,9 +1037,9 @@ void _Draw_UI(App_t* app, UI_t *ui) {
 }
 
 void _Draw_loadCamera(App_t *app, vec2 cameraPosition) {
-  glm_mat4_identity(app->_draw._view);
+  glm_mat4_identity(app->draw._view);
   glm_translate(
-    app->_draw._view,
+    app->draw._view,
     (vec3) { 
       cameraPosition[0], 
       cameraPosition[1], 
@@ -1107,13 +1048,13 @@ void _Draw_loadCamera(App_t *app, vec2 cameraPosition) {
   );
 
   glm_mat4_mul(
-    app->_draw._projection,
-    app->_draw._view,
-    app->_draw._globalUBData.projectionView
+    app->draw._projection,
+    app->draw._view,
+    app->draw._globalUBData.projectionView
   );
 
-  glNamedBufferSubData(app->_draw._globalUB, 0, 
-    sizeof(_GlobalUBData_t), &app->_draw._globalUBData
+  glNamedBufferSubData(app->draw._globalUB, 0, 
+    sizeof(_GlobalUBData_t), &app->draw._globalUBData
   );
 }
 
@@ -1133,14 +1074,14 @@ void _App_render(App_t *app) {
   glm_scale(spriteUB.model, 
     (vec3) { 0.1f, 0.1f, 0 }
   );
-  glNamedBufferSubData(app->_draw._localUB, 0, 
+  glNamedBufferSubData(app->draw._localUB, 0, 
     sizeof(_LocalUBData2D_t), &spriteUB
   );
 
-  glUseProgram(app->_draw._flatShader);
-  glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->_draw._globalUB); 
-  glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->_draw._localUB);
-  glBindVertexArray(app->_draw._quadVAO);
+  glUseProgram(app->draw._flatShader);
+  glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->draw._globalUB); 
+  glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->draw._localUB);
+  glBindVertexArray(app->draw._quadVAO);
   glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
   spriteUB = (_LocalUBData2D_t) {
@@ -1158,12 +1099,12 @@ void _App_render(App_t *app) {
   glm_translate(spriteUB.model, cPos);
   glm_scale(spriteUB.model, (vec3) {0.025, 0.025, 1.f});
 
-  glNamedBufferSubData(app->_draw._localUB, 0, 
+  glNamedBufferSubData(app->draw._localUB, 0, 
     sizeof(_LocalUBData2D_t), &spriteUB
   );
-  glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->_draw._globalUB); 
-  glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->_draw._localUB);
-  glBindVertexArray(app->_draw._quadVAO);
+  glBindBufferBase(GL_UNIFORM_BUFFER, 0, app->draw._globalUB); 
+  glBindBufferBase(GL_UNIFORM_BUFFER, 1, app->draw._localUB);
+  glBindVertexArray(app->draw._quadVAO);
   glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
   char cPosBuffer[64];
@@ -1238,6 +1179,8 @@ void _App_render(App_t *app) {
   _Draw_UI(app, &app->_uiRoot);
   glfwSwapBuffers(app->_wnd);
   UStr_destroy(&str);
+
+  glfwMakeContextCurrent(NULL);
 }
 
 void __testButtonCallback(App_t  *app, UI_t *self) {
@@ -1249,15 +1192,14 @@ void __testButtonCallback(App_t  *app, UI_t *self) {
 
 Result_t _App_initUI(App_t *app) {
   UiInfo_t info = {
-    .color = COLOR_TRANSPARENT,
+    .color = {1.f, 0.f, 0.f, 0.5f},
     .flags = UI_FLAG_NONE,
     .parent = NULL,
-    .position = {0.f, 0.f},
     .size = (UiSize_t) {
-      .flag = UI_SIZE_FLAG_REAL,
-      .width = 2.0,
-      .height = 2.0f
+      .width = 2.f,
+      .height = 2.f
     },
+    .position = {0.f, 0.f},
     .type = UI_EL_TYPE_CONTAINER,
     .id = ROOT_ID
   };
@@ -1271,11 +1213,11 @@ Result_t _App_initUI(App_t *app) {
     .flags = UI_FLAG_ORDER_VERTICAL,
     .color = COLOR_BASE,
     .size = (UiSize_t) {
-      .flag = UI_SIZE_FLAG_FILL_WIDTH,
-      .width = 1.0,
-      .height = 0.5f
+      .flag = UI_SIZE_FLAG_REAL,
+      .width = 2.f,
+      .height = 0.9f
     },
-    .position = {0.f, -0.75f},
+    .position = {0.f, -1.f},
     .id = 1,
     .parentId = 0
   };
@@ -1290,74 +1232,71 @@ Result_t _App_initUI(App_t *app) {
     .color = COLOR_SECONDARY,
     .size = (UiSize_t) {
       .flag = UI_SIZE_FLAG_REAL,
-      .width = 1.0f,
-      .height = 1.0f
+      .width = 0.1f,
+      .height = 0.1f
     },
     .position = {0.5f, 0.5f},
     .id = 2,
     .parentId = 1
   };
   UI_addChildInputById(&app->_uiRoot, &info, &inputInfo);
-
-  UiButtonInfo_t buttonInfo = {
-    .onHoverColor = COLOR_SECONDARY,
-    .onClick = __testButtonCallback,
-  };
-
-  info = (UiInfo_t) {
-    .flags = UI_FLAG_NONE,
-    .color = COLOR_SECONDARY,
-    .size = (UiSize_t) {
-      .flag = UI_SIZE_FLAG_REAL,
-      .width = 0.5f,
-      .height = 0.25f
-    },
-    .position = {0.f, 0.5f},
-    .id = 3,
-    .parentId = 1
-  };
-  UI_addChildButtonById(&app->_uiRoot, &info, &buttonInfo);
-  
-  buttonInfo = (UiButtonInfo_t) {
-    .onHoverColor = COLOR_SECONDARY,
-    .onClick = __testButtonCallback,
-  };
-
-  info = (UiInfo_t) {
-    .flags = UI_FLAG_NONE,
-    .color = COLOR_PRIMARY,
-    .size = (UiSize_t) {
-      .flag = UI_SIZE_FLAG_REAL,
-      .width = 1.0,
-      .height = 0.4f
-    },
-    .position = {0.f, 0.f},
-    .id = 4,
-    .parentId = 1
-  };
-
-  UiTextInfo_t textInfo = {
-    .str = "Add Macro"
-  };
-
-  info = (UiInfo_t) {
-    .flags = UI_FLAG_WIREFRAME,
-    .color = COLOR_BLACK,
-    .size = (UiSize_t) {
-      .flag = UI_SIZE_FLAG_REAL | UI_SIZE_FLAG_FILL_HEIGHT | UI_SIZE_FLAG_FILL_WIDTH,
-      .width = 1.f,
-      .height = 1.f
-    },
-    .position = {0.f, 0.f},
-    .id = 5,
-    .parentId = 4
-  };
-  UI_addChildTextById(&app->_uiRoot, &info, &textInfo);
+//
+//  UiButtonInfo_t buttonInfo = {
+//    .onHoverColor = COLOR_SECONDARY,
+//    .onClick = __testButtonCallback,
+//  };
+//
+//  info = (UiInfo_t) {
+//    .flags = UI_FLAG_NONE,
+//    .color = COLOR_PRIMARY,
+//    .size = (UiSize_t) {
+//      .flag = UI_SIZE_FLAG_REAL,
+//      .width = 0.01f,
+//      .height = 0.01f
+//    },
+//    .position = {0.f, 0.5f},
+//    .id = 3,
+//    .parentId = 1
+//  };
+//  UI_addChildButtonById(&app->_uiRoot, &info, &buttonInfo);
+//  
+//  buttonInfo = (UiButtonInfo_t) {
+//    .onHoverColor = COLOR_SECONDARY,
+//    .onClick = __testButtonCallback,
+//  };
+//
+//  info = (UiInfo_t) {
+//    .flags = UI_FLAG_NONE,
+//    .color = COLOR_PRIMARY,
+//    .size = (UiSize_t) {
+//      .flag = UI_SIZE_FLAG_REAL,
+//      .width = 0.01f,
+//      .height = 0.01f
+//    },
+//    .position = {0.f, 0.f},
+//    .id = 4,
+//    .parentId = 1
+//  };
+//  UI_addChildButtonById(&app->_uiRoot, &info, &buttonInfo);
+//
+//  UiTextInfo_t textInfo = {
+//    .str = "Add Macro"
+//  };
+//
+//  info = (UiInfo_t) {
+//    .flags = UI_FLAG_WIREFRAME,
+//    .color = COLOR_BLACK,
+//    .size = (UiSize_t) {
+//      .flag = UI_SIZE_FLAG_REAL | UI_SIZE_FLAG_FILL_HEIGHT | UI_SIZE_FLAG_FILL_WIDTH,
+//      .width = 0.01f,
+//      .height = 0.01f
+//    },
+//    .position = {0.f, 0.f},
+//    .id = 5,
+//    .parentId = 4
+//  };
+//  UI_addChildTextById(&app->_uiRoot, &info, &textInfo);
   return RESULT_SUCCESS;
-}
-
-inline void _App_cleanupUI(App_t *app) {
-  UI_destroy(&app->_uiRoot);
 }
 
 bool _App_UIprocessEvent(App_t *app, UI_t *ui, Event_t *ev) {
@@ -1430,7 +1369,9 @@ void _App_update(App_t *app)
 void App_destroy(App_t *app) {
   DEBUG_ASSERT(app != NULL, "App is set to null on App_destroy");
 
-  _App_cleanupUI(app);
+  CloseHandle(app->_renderThread);
+
+  UI_destroy(&app->_uiRoot);
   EventQueue_cleanup(&app->_evQueue);
   _App_cleanupTextRenderer(app);
   _App_OpenGlCleanup(app);
@@ -1439,20 +1380,6 @@ void App_destroy(App_t *app) {
   glfwDestroyWindow(app->_wnd);
   
   free(app);
-}
-
-void App_run(App_t *app) {
-  _App_getMouseWorldPosition(app, app->_mouseStart);
-
-  while (app->_running) {
-    if (!__App_frameTimeElapsed(app)) {
-      continue;
-    }
-
-    glfwPollEvents();
-    _App_render(app);
-    _App_update(app);
-  }
 }
 
 inline void __App_calculateProjection(App_t *app) {
@@ -1464,21 +1391,23 @@ inline void __App_calculateProjection(App_t *app) {
     -aspect, aspect,
     -1.f, 1.f,
     -1.f, 1.f,
-    app->_draw._projection
+    app->draw._projection
   );
 }
 
 void _App_wndFbResizeCBCK(GLFWwindow *window, int width, int height) {
   App_t *app = glfwGetWindowUserPointer(window);
 
+  glfwMakeContextCurrent(app->_wnd);
   glViewport(0, 0, width, height);
+  
   __App_calculateProjection(app);
 
   int fbfW = 0, fbfH = 0;
   glfwGetFramebufferSize(app->_wnd, &fbfW, &fbfH);
 
   float aspect =  fbfW / (float)fbfH;
-  app->_uiRoot._size.width = aspect * 2.f;
+  app->_uiRoot.size.width = 2.f * aspect;
   __UI_updateMatrix(&app->_uiRoot);
 
   if (!__App_frameTimeElapsed(app))
@@ -1488,15 +1417,73 @@ void _App_wndFbResizeCBCK(GLFWwindow *window, int width, int height) {
   _App_render(app);
 }
 
+
+Result_t App_run(App_t *app) {
+  int winWidth, winHeight;
+  glfwGetFramebufferSize(app->_wnd, &winWidth, &winHeight);
+  _App_wndFbResizeCBCK(app->_wnd, winWidth, winHeight);
+
+  _App_getMouseWorldPosition(app, app->_mouseStart);
+
+  if (_App_initDrawThread(app) != RESULT_SUCCESS) {
+    log_error("Failed to initialize theads");
+    return RESULT_FAIL;
+  }
+
+  while (app->_running) {
+    if (!__App_frameTimeElapsed(app)) {
+      continue;
+    }
+
+    glfwPollEvents();
+    _App_render(app);
+    _App_update(app);
+  }
+
+  WaitForSingleObject(app->_renderThread, INFINITE);
+  return RESULT_SUCCESS;
+}
+
 void _App_wndCursorPosCBCK(GLFWwindow* window, double xpos, double ypos) {
   App_t *app = glfwGetWindowUserPointer(window);
   Event_t payload = {
+    .category = EVENT_CAT_INPUT,
     .type = EVENT_TYPE_MOUSE_MOVE,
     .position = {0}
   };
 
   _App_getMouseScreenNormalizedCentered(app, payload.position);
   EventQueue_push(&app->_evQueue, &payload);
+}
+
+DWORD WINAPI Draw_runWIN32(App_t *app) {
+  while (app->_running) {
+    if (!Draw_frameTimeElapsed(&app->draw)) {
+      continue;
+    }
+
+  }
+
+  return 0;
+}
+
+// Windows only for now
+Result_t _App_initDrawThread(App_t *app) {
+  app->_renderThread = CreateThread( 
+    NULL,
+    0,  
+    Draw_runWIN32,
+    app,
+    0,
+    app->_renderThread
+  ); 
+
+  if (app->_renderThread == NULL) {
+    log_error("Failed to create render thread.");
+    return RESULT_FAIL;
+  }
+
+  return RESULT_SUCCESS;
 }
 
 Result_t App_create(App_t** p_app, AppInfo_t info) {
@@ -1522,7 +1509,7 @@ Result_t App_create(App_t** p_app, AppInfo_t info) {
     ._camNew = {0, 0},
     ._camMoving = false,
 
-    ._draw = (struct __Draw_t) {
+    .draw = (Draw_t) {
       ._quadEBO = 0,
       ._quadVAO = 0,
       ._quadVBO = 0,
@@ -1536,7 +1523,10 @@ Result_t App_create(App_t** p_app, AppInfo_t info) {
       ._globalUB = 0, ._localUB = 0,
       ._globalUBData = (_GlobalUBData_t) {
         .projectionView = GLM_MAT4_IDENTITY_INIT 
-      }
+      },
+
+      ._lastTime = 0.0,
+      ._deltaTime = 0.0,
     },
 
     ._spritePosition = {0, 0},
@@ -1573,6 +1563,12 @@ Result_t App_create(App_t** p_app, AppInfo_t info) {
     return RESULT_FAIL;
   }
 
+  EventQueue_init(&(*p_app)->_evQueue);
+  if (_App_initUI(*p_app) != RESULT_SUCCESS) {
+    log_error("Failed to initialize app ui" ENDL);
+    return RESULT_FAIL;
+  }
+
   if (_App_initOpenGL(*p_app) != RESULT_SUCCESS) {
     log_error("Failed to setup OpenGL resources" ENDL);
     return RESULT_FAIL;
@@ -1583,11 +1579,9 @@ Result_t App_create(App_t** p_app, AppInfo_t info) {
     return RESULT_FAIL;
   }
 
-  EventQueue_init(&(*p_app)->_evQueue);
-  if (_App_initUI(*p_app) != RESULT_SUCCESS) {
-    log_error("Failed to initialize app ui" ENDL);
-    return RESULT_FAIL;
-  }
+  Draw_timeInit(&(*p_app)->draw);
+
+  glfwMakeContextCurrent(NULL);
 
   return RESULT_SUCCESS;
 }
@@ -1611,29 +1605,32 @@ int main(void) {
 
   if (glfwInit() != GLFW_TRUE) {
     log_error("Failed to init GLFW");
-    glfwTerminate();
 
+    glfwTerminate();
     fclose(logFile);
     return -1;
   }
 
   App_t *app = NULL;
-  if (App_create(&app, APP_INFO_INIT) != RESULT_SUCCESS) {
-    log_info("Program failed at app creation" ENDL);
 
-    App_destroy(app);
-    glfwTerminate();
-
-    fclose(logFile);
-    return -1;
+  Result_t initResult = App_create(&app, APP_INFO_INIT);
+  if (initResult != RESULT_SUCCESS) {
+    log_info("Macro failed at app creation" ENDL);
+    goto macro_termination;
   }
 
-  App_run(app);
+  Result_t runtimeResult = App_run(app);
+  if (runtimeResult == RESULT_FAIL) {
+    log_error("Macro failed during the runtime");
+    goto macro_termination;
+  }
+
+  log_info("Macro ended successfully" ENDL);
+
+macro_termination:
   App_destroy(app);
-
   glfwTerminate();
-
-  log_info("Program ended successfully" ENDL);
   fclose(logFile);
-  return 0;
+
+  return (initResult == RESULT_SUCCESS && runtimeResult == RESULT_SUCCESS) ? 0 : -1;
 }

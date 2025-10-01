@@ -6,30 +6,36 @@ void UiSize_copy(UiSize_t *dst, UiSize_t *src) {
 }
 
 void __UI_calculateMatrix(UI_t *self) {
-  glm_mat4_identity(self->_matrix);
+  mat4 matrix = GLM_MAT4_IDENTITY_INIT;
+  // glm_mat4_identity(self->_matrix);
   
-  glm_translate(self->_matrix, (vec3){
+  glm_translate(matrix, (vec3){
       self->_globalPos[0],
       self->_globalPos[1],
       0.f
     }
   );
 
-  float width = self->_size.width;
-  float height = self->_size.height;
-
   if (self->parent != NULL &&
-      self->_size.flag & UI_SIZE_FLAG_FILL_HEIGHT) {
-    height = self->parent->_size.height;
+      self->size.flag & UI_SIZE_FLAG_FILL_HEIGHT) {
+    self->size.height = self->parent->size.height;
   }
   if (self->parent != NULL &&
-      self->_size.flag & UI_SIZE_FLAG_FILL_WIDTH) {
-    width = self->parent->_size.width;
+      self->size.flag & UI_SIZE_FLAG_FILL_WIDTH) {
+    self->size.width = self->parent->size.width;
   }
 
-  glm_scale(self->_matrix,
-    (vec3) { width, height, 1.0f }
+  glm_scale(matrix,
+    (vec3) { self->size.width, self->size.height, 1.0f }
   );
+
+  if (self->parent != NULL) {
+    mat4 parentMatrixInverse = {0};
+    glm_mat4_inv(self->parent->_matrix, parentMatrixInverse);
+    glm_mat4_mul(parentMatrixInverse, matrix, self->_matrix);
+  } else {
+    glm_mat4_copy(matrix, self->_matrix);
+  }
 }
 
 void __UI_updateMatrix(UI_t *self) {
@@ -59,7 +65,7 @@ void UI_setSize(UI_t *self, UiSize_t newSize) {
     "Size cannot exceed 1.f or be less than 0.f"
   );
 
-  UiSize_copy(&self->_size, &newSize);
+  UiSize_copy(&self->size, &newSize);
   __UI_updateMatrix(self);
 }
 
@@ -73,7 +79,7 @@ Result_t UI_init(UI_t *self, UiInfo_t *info) {
   self->flags = info->flags;
 
   memcpy(self->_pos, info->position, sizeof(vec2));
-  UiSize_copy(&self->_size, &info->size);
+  UiSize_copy(&self->size, &info->size);
   memcpy(self->color, info->color, sizeof(vec4));
   memcpy(self->_color, info->color, sizeof(vec4));
 
@@ -112,29 +118,28 @@ UI_t *UI_addChild(UI_t *self, UiInfo_t *info) {
 }
 
 UI_t *UI_findById(UI_t *root, UiId_t id) {
-  if (id == NO_ID) {
-    return root;
-  }
+  if (id == NO_ID)
+    return NULL;
 
-  if (id == ROOT_ID) {
+  if (id == root->id)
     return root;
-  }
-
-  if (id == root->id) {
-    return root;
-  }
 
   for (UI_t *child = root->children; child < &root->children[root->childCount]; child++) {
-    return UI_findById(child, id);
+    UI_t *result = UI_findById(child, id);
+    if (result != NULL) {
+      return result;
+    }
   }
 
-  return root;
+  return NULL;
 }
 
-UiId_t UI_addChildById(UI_t *root, UiInfo_t *info) {
+UI_t *UI_addChildById(UI_t *root, UiInfo_t *info) {
   UI_t *parent = UI_findById(root, info->parentId);
-  UI_addChild(parent, info);
-  return parent->id;
+  if (parent == NULL)
+    parent = root;
+
+  return UI_addChild(parent, info);
 }
 
 void UI_destroy(UI_t *self) {
@@ -176,10 +181,12 @@ UI_t *UI_addChildContainer(UI_t *self, UiInfo_t *info, UiContainerInfo_t *specIn
   return child;
 }
 
-UiId_t UI_addChildContainerById(UI_t *root, UiInfo_t *info, UiContainerInfo_t *specInfo) {
+UI_t *UI_addChildContainerById(UI_t *root, UiInfo_t *info, UiContainerInfo_t *specInfo) {
   UI_t *parent = UI_findById(root, info->parentId);
-  UI_addChildContainer(parent, info, specInfo);
-  return parent->id;
+  if (parent == NULL)
+    parent = root;
+
+  return UI_addChildContainer(parent, info, specInfo);
 }
 
 void __UI_initButton(UI_t *self, UiButtonInfo_t *specInfo) {
@@ -205,10 +212,12 @@ UI_t *UI_addChildButton(UI_t *self, UiInfo_t *info, UiButtonInfo_t *specInfo) {
   return child;
 }
 
-UiId_t UI_addChildButtonById(UI_t *root, UiInfo_t *info, UiButtonInfo_t *specInfo) {
+UI_t *UI_addChildButtonById(UI_t *root, UiInfo_t *info, UiButtonInfo_t *specInfo) {
   UI_t *parent = UI_findById(root, info->parentId);
-  UI_addChildButton(parent, info, specInfo);
-  return parent->id;
+  if (parent == NULL)
+    parent = root;
+
+  return UI_addChildButton(parent, info, specInfo);
 }
 
 bool UI_isHovered(UI_t* self, vec2 mouseWorldPos) {
@@ -217,8 +226,8 @@ bool UI_isHovered(UI_t* self, vec2 mouseWorldPos) {
   glm_vec2_copy(self->_globalPos, bottomLeft);
   glm_vec2_copy(self->_globalPos, topRight);
 
-  float halfWidth = self->_size.width / 2.f;
-  float halfHeight = self->_size.height / 2.f;
+  float halfWidth = self->size.width / 2.f;
+  float halfHeight = self->size.height / 2.f;
 
   topRight[0] += halfWidth;
   bottomLeft[0] -= halfWidth;
@@ -250,48 +259,21 @@ UI_t *UI_addChildText(UI_t *self, UiInfo_t *info, UiTextInfo_t *specInfo) {
 }
 
 
-UiId_t UI_addChildTextById(UI_t *root, UiInfo_t *info, UiTextInfo_t *specInfo) {
+UI_t *UI_addChildTextById(UI_t *root, UiInfo_t *info, UiTextInfo_t *specInfo) {
   UI_t *parent = UI_findById(root, info->parentId);
-  UI_addChildText(parent, info, specInfo);
-  return parent->id;
-}
+  if (parent == NULL)
+    parent = root;
 
-void EventQueue_init(EventQueue_t *self) {
-  self->cap = DEFAULT_BUF_CAP;
-  self->count = 0;
-  self->events = malloc(self->cap);
-}
-
-void EventQueue_cleanup(EventQueue_t *self) {
-  free(self->events);
-  self->count = 0;
-  self->cap = 0;
-}
-
-void EventQueue_push(EventQueue_t *self, Event_t *ev) {
-  self->count++;
-  while (self->cap < self->count * sizeof(Event_t)) {
-    self->cap <<= 1;
-  }
-  self->events = realloc(self->events, self->cap);
-
-  memcpy(&self->events[self->count - 1], ev, sizeof(Event_t));
-}
-
-bool EventQueue_pop(EventQueue_t *self, Event_t *ev) {
-  if (self->count == 0) {
-    *ev = (Event_t){0};
-    return false;
-  }
-
-  self->count--;
-  memcpy(ev, &self->events[self->count], sizeof(Event_t));
-  return true;
+  return UI_addChildText(parent, info, specInfo);
 }
 
 bool UI_buttonProcessEvent(UI_t *self, void *ctx, Event_t *ev) {
   UiButton_t *unique = self->_unique;
   bool hovered = UI_isHovered(self, ev->position);
+
+  if (ev->category != EVENT_CAT_INPUT) {
+    return false;
+  }
 
   switch(ev->type) {
     case EVENT_TYPE_CLICK: {
@@ -333,13 +315,19 @@ UI_t *UI_addChildInput(UI_t *self, UiInfo_t *info, UiInputInfo_t *specInfo) {
 }
 
 // THIS SHOULD INLINE
-UiId_t UI_addChildInputById(UI_t *root, UiInfo_t *info, UiInputInfo_t *specInfo) {
+UI_t *UI_addChildInputById(UI_t *root, UiInfo_t *info, UiInputInfo_t *specInfo) {
   UI_t *parent = UI_findById(root, info->parentId);
-  UI_addChildInput(parent, info, specInfo);
-  return parent->id;
+  if (parent == NULL)
+    parent = root;
+
+  return UI_addChildInput(parent, info, specInfo);
 }
 
 bool UI_inputProcessEvent(UI_t *self, Event_t *ev) {
+  if (ev->category != EVENT_CAT_INPUT) {
+    return false;
+  }
+
   UiInput_t *unique = self->_unique;
   bool hovered = UI_isHovered(self, ev->position);
 
